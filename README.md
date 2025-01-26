@@ -13,22 +13,22 @@ This documentation provides a technical guide for building a system that leverag
 
 
 
-* **RAG Pipelines: **Pathway’s efficient pipeline framework is used to build scalable workflows for real-time and batch processing of multimodal data.
-* **Google Drive Connector: **Handles real-time data ingestion from Google Drive for seamless integration of financial reports.
-* **VectorStore/DocumentStore: **Enables instant access and retrieval of relevant data for analysis.
+* **RAG Pipelines:** Pathway’s efficient pipeline framework is used to build scalable workflows for real-time and batch processing of multimodal data.
+* **Google Drive Connector:** Handles real-time data ingestion from Google Drive for seamless integration of financial reports.
+* **VectorStore/DocumentStore:** Enables instant access and retrieval of relevant data for analysis.
 
 **2. Claude Sonet 3.5**
 
 
 
-* **LLM: **A powerful large language model used for natural language understanding and generation to analyze textual and tabular data.
-* **Multimodal Processing: **Handles diverse data formats, enhancing the insights derived from financial reports.
+* **LLM:** A powerful large language model used for natural language understanding and generation to analyze textual and tabular data.
+* **Multimodal Processing:** Handles diverse data formats, enhancing the insights derived from financial reports.
 
 **3. Streamlit**
 
 
 
-* **Frontend: **Provides an interactive user interface for visualizing financial data insights and interacting with the system.
+* **Frontend:** Provides an interactive user interface for visualizing financial data insights and interacting with the system.
 
 
 ---
