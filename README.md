@@ -1,5 +1,7 @@
-RAG & LLM with Pathway to Process Financial Reports and Tables
+**RAG & LLM with Pathway to Process Financial Reports and Tables**
+
 Overview
+
 This documentation provides a technical guide for building a system that leverages Retrieval-Augmented Generation (RAG) and large language models (LLMs) to process financial reports and tables. The system integrates structured data (e.g., tables) and unstructured data (e.g., text, images) with Claude Sonet 3.5, using Pathway’s Google Drive Connector and Streamlit for the user interface.
 
 Key Components and Technologies
