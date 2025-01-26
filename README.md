@@ -1,4 +1,4 @@
-#**RAG & LLM with Pathway to Process Financial Reports and Tables**
+**RAG & LLM with Pathway to Process Financial Reports and Tables**
 
 **Overview**
 
