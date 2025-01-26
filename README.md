@@ -1,4 +1,4 @@
-*RAG & LLM with Pathway to Process Financial Reports and Tables*
+***RAG & LLM with Pathway to Process Financial Reports and Tables***
 
 *Overview*
 
@@ -61,53 +61,8 @@ This documentation provides a technical guide for building a system that leverag
   - Defines the ClaudeSonetLLM class, encapsulating the interaction logic with Claude Sonet’s API.
   - Supports multimodal data queries and responses.
 
-*Implementation Steps*
-
-*1\. Setting Up Pathway*
-
-- Clone the repository:
-- git clone <https://github.com/pathwaycom/llm-app.git>
-- cd llm-app/examples/pipelines/gpt_4o_multimodal_rag
-
-*2\. Install Pathway:*
-
-- pip install pathway
-
-*3\. Configuring Google Drive Connector*
-
-- Place your credentials.json file in the /pathway/financial-report-insights folder.
-- Update the app.py script to include the Google Drive connector:
-
-from pathway.connectors.google_drive import GoogleDriveConnector
-
-drive_connector = GoogleDriveConnector(credentials_path="credentials.json")
-
-pipeline.add_source(drive_connector)
-
-*4\. Building the Pipeline*
-
-- Use the RAG pipeline logic from the [GitHub example](https://github.com/pathwaycom/pathway).
-- Integrate structured and unstructured data processing using the ClaudeSonetLLM class in claude_llm.py.
-
-*4\. Developing the Streamlit App*
-
-- Create the streamlit_app.py script to visualize insights:
-
-import streamlit as st
-
-st.title("Financial Report Insights")
-
-st.sidebar.file_uploader("Upload Financial Reports")
-
-\# Add visualization and query components
-
-*5\. Deploying the Application*
-
-- Build the Docker image:
-
-docker build -t financial-report-insights .
-
-- Deploy using the Pathway CLI or Docker Compose.
+*Refrences*
+- AI pipeline logic from Pathway. (https://github.com/pathwaycom/pathway).
 
 *Conclusion*
 
