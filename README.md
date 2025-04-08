@@ -1,83 +1,121 @@
-**RAG & LLM with Pathway to Process Financial Reports and Tables**
+# RAG-LLM Using AI Pipeline with Streamlit Interface 🚀
 
-**Overview**
+![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-blue?style=for-the-badge&logo=github)
 
-This project is for building a system that leverages Retrieval-Augmented Generation (RAG) and large language models (LLMs) to process financial reports and tables. The system integrates structured data (e.g., tables) and unstructured data (e.g., text, images) with Claude Sonet 3.5, using Pathway’s Google Drive Connector and Streamlit for the user interface.
+Welcome to the **RAG-LLM Using AI Pipeline with Streamlit Interface** repository! This project integrates Retrieval-Augmented Generation (RAG) with the Claude Sonet 3.5 LLM and the Pathway framework to provide insights into financial reports and tables. The system ingests data from Google Drive, processes both structured and unstructured formats in real time, and presents the results through a user-friendly Streamlit interface.
 
+[Check out the latest releases here!](https://github.com/Dono1901/RAG-LLM-using-AI-Pipeline-with-streamlit-interface/releases)
 
----
+## Table of Contents
 
-**Key Components and Technologies**
+1. [Introduction](#introduction)
+2. [Features](#features)
+3. [Technologies Used](#technologies-used)
+4. [Installation](#installation)
+5. [Usage](#usage)
+6. [Contributing](#contributing)
+7. [License](#license)
+8. [Contact](#contact)
 
-**1. Pathway Framework**
+## Introduction
 
+In the world of finance, analyzing data efficiently is crucial. This project aims to streamline that process by combining advanced AI techniques with practical tools. By leveraging the power of RAG and the Claude Sonet 3.5 LLM, users can extract meaningful insights from complex financial documents. The integration with Google Drive allows for easy data access, while the Streamlit interface makes it simple to visualize results.
 
+## Features
 
-* **RAG Pipelines:** Pathway’s efficient pipeline framework is used to build scalable workflows for real-time and batch processing of multimodal data.
-* **Google Drive Connector:** Handles real-time data ingestion from Google Drive for seamless integration of financial reports.
-* **VectorStore/DocumentStore:** Enables instant access and retrieval of relevant data for analysis.
+- **Real-time Data Processing**: Ingest and analyze data from Google Drive instantly.
+- **Structured and Unstructured Format Handling**: Process various types of financial documents.
+- **User-friendly Interface**: Visualize insights through a Streamlit-powered dashboard.
+- **Integration with Claude Sonet 3.5 LLM**: Utilize advanced language models for enhanced analysis.
+- **Retrieval-Augmented Generation**: Combine traditional data retrieval with modern AI techniques for better results.
 
-**2. Claude Sonet 3.5**
+## Technologies Used
 
+This project employs a variety of technologies to achieve its goals:
 
+- **Python**: The primary programming language for development.
+- **Streamlit**: For creating the web interface.
+- **Claude Sonet 3.5 LLM**: The language model for processing and generating text.
+- **Pathway Framework**: To streamline the AI pipeline.
+- **Google Drive API**: For data ingestion.
+- **Vector Database**: For efficient data storage and retrieval.
 
-* **LLM:** A powerful large language model used for natural language understanding and generation to analyze textual and tabular data.
-* **Multimodal Processing:** Handles diverse data formats, enhancing the insights derived from financial reports.
+## Installation
 
-**3. Streamlit**
+To set up the project locally, follow these steps:
 
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/Dono1901/RAG-LLM-using-AI-Pipeline-with-streamlit-interface.git
+   ```
 
+2. **Navigate to the Project Directory**:
+   ```bash
+   cd RAG-LLM-using-AI-Pipeline-with-streamlit-interface
+   ```
 
-* **Frontend:** Provides an interactive user interface for visualizing financial data insights and interacting with the system.
+3. **Install Dependencies**:
+   Make sure you have Python 3.8 or higher installed. Then, run:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
+4. **Set Up Google Drive API**:
+   Follow the instructions in the [Google Drive API documentation](https://developers.google.com/drive/api/v3/quickstart/python) to set up your credentials.
 
----
+5. **Run the Application**:
+   Start the Streamlit server with:
+   ```bash
+   streamlit run app.py
+   ```
 
-**Folder Structure**
+## Usage
 
-/financial-report-insights
+After setting up the application, you can start using it:
 
-    ├── app.py            # Backend processing script with Pathway pipeline.
+1. **Access the Interface**:
+   Open your web browser and go to `http://localhost:8501`.
 
-    ├── app.yaml          # Pathway configuration for deployment.
+2. **Upload Financial Reports**:
+   Use the interface to upload your financial documents from Google Drive.
 
-    ├── Dockerfile        # Dockerfile for containerization.
+3. **Analyze Data**:
+   The system will process the data and provide insights in real time.
 
-    ├── requirements.txt  # Python dependencies.
+4. **Visualize Results**:
+   Explore the insights through the interactive dashboard.
 
-    ├── credentials.json  # Google Drive credentials.
+## Contributing
 
-    ├── streamlit_app.py  # Streamlit frontend for user interaction.
+We welcome contributions! If you want to help improve this project, please follow these steps:
 
-    └── claude_llm.py     # Contains ClaudeSonetLLM class for interacting with Claude Sonet's API.
+1. **Fork the Repository**.
+2. **Create a New Branch**:
+   ```bash
+   git checkout -b feature/YourFeature
+   ```
+3. **Make Your Changes**.
+4. **Commit Your Changes**:
+   ```bash
+   git commit -m "Add some feature"
+   ```
+5. **Push to the Branch**:
+   ```bash
+   git push origin feature/YourFeature
+   ```
+6. **Open a Pull Request**.
 
-**Description of Files**
+## License
 
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
+## Contact
 
-* **app.py:**
-    * Implements the main Pathway pipeline.
-    * Connects to Google Drive for ingesting financial reports.
-    * Processes structured and unstructured data using RAG and Claude Sonet 3.5.
-* **app.yaml:**
-    * Contains deployment configurations for running the Pathway pipeline in production or test environments.
-* **Dockerfile:**
-    * Configures the application’s environment for containerized deployment.
-    * Ensures compatibility and portability across systems.
-* **requirements.txt:**
-    * Specifies Python dependencies, including pathway, streamlit, and other necessary libraries.
-* **credentials.json:**
-    * Stores authentication credentials for accessing Google Drive.
-* **streamlit_app.py:**
-    * Builds an interactive frontend using Streamlit.
-    * Displays financial insights and enables user input for specific queries.
-* **claude_llm.py:**
-    * Defines the ClaudeSonetLLM class, encapsulating the interaction logic with Claude Sonet’s API.
-    * Supports multimodal data queries and responses.
+For any questions or feedback, feel free to reach out:
 
+- **Email**: your.email@example.com
+- **Twitter**: [@yourhandle](https://twitter.com/yourhandle)
 
----
+Thank you for your interest in the **RAG-LLM Using AI Pipeline with Streamlit Interface**! 
 
-**Conclusion**
-
-By combining Pathway’s real-time processing capabilities with the Claude Sonet 3.5 LLM, this system enables efficient analysis of multimodal financial data. The use of Streamlit enhances accessibility and usability, providing a comprehensive tool for financial insights.
+For the latest updates and releases, visit our [Releases section](https://github.com/Dono1901/RAG-LLM-using-AI-Pipeline-with-streamlit-interface/releases).
