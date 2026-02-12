@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets & credentials
+.env
+*.pem
+*.key
+credentials.json
+service_account.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+financial-report-insights/.cache/
+financial-report-insights/documents/
+*.xlsx
+*.csv
+!financial-report-insights/tests/**/*.xlsx
+!financial-report-insights/tests/**/*.csv
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Jupyter
+.ipynb_checkpoints/

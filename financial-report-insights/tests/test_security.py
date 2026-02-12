@@ -3,16 +3,12 @@ Security tests for file upload sanitization and input validation.
 Tests: path traversal, file size limits, query length limits, filename sanitization.
 """
 
-import io
 import os
 import pytest
-import sys
 import tempfile
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import settings
 

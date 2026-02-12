@@ -675,7 +675,7 @@ class ExcelProcessor:
             # Create markdown table
             try:
                 table_text = chunk_df.to_markdown(index=False)
-            except:
+            except (ImportError, TypeError):
                 # Fallback to string representation
                 table_text = chunk_df.to_string(index=False)
 
@@ -781,7 +781,9 @@ def process_excel_for_rag(file_path: Path, documents_path: str = "./documents") 
 
     return [
         {
+            "source": str(file_path.name),
             "content": chunk.text_content,
+            "type": "excel",
             "metadata": {
                 "source": str(file_path.name),
                 "sheet": chunk.sheet_name,

@@ -1,0 +1,64 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          memory: 4G
+
+  rag-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-financial-insights
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./documents:/app/documents
+      - app-cache:/app/.cache
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - RAG_LLM_MODEL=${RAG_LLM_MODEL:-llama3.2}
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - RAG_CHUNK_SIZE=${RAG_CHUNK_SIZE:-500}
+      - RAG_TOP_K=${RAG_TOP_K:-3}
+      - RAG_MAX_FILE_SIZE_MB=${RAG_MAX_FILE_SIZE_MB:-50}
+      - RAG_MAX_QUERY_LENGTH=${RAG_MAX_QUERY_LENGTH:-2000}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # One-time model pull (run with: docker compose run --rm ollama-setup)
+  ollama-setup:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["curl", "-sf", "-X", "POST", "http://ollama:11434/api/pull", "-d", "{\"name\":\"llama3.2\"}"]
+    profiles:
+      - setup
+
+volumes:
+  ollama-data:
+  app-cache:

@@ -7,21 +7,21 @@ Enhanced with Excel processing and financial analysis capabilities.
 import hashlib
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 from dotenv import load_dotenv
 
 from config import settings
 from local_llm import LocalLLM, LocalEmbedder
+from logging_config import setup_logging
 from protocols import LLMProvider, EmbeddingProvider
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Setup structured logging
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,13 @@ class SimpleRAG:
             self.llm = llm
         else:
             logger.info(f"Initializing LocalLLM with model: {llm_model}")
-            self.llm = LocalLLM(model=llm_model)
+            self.llm = LocalLLM(
+                model=llm_model,
+                timeout_seconds=settings.llm_timeout_seconds,
+                max_retries=settings.llm_max_retries,
+                circuit_breaker_failure_threshold=settings.circuit_breaker_failure_threshold,
+                circuit_breaker_recovery_seconds=settings.circuit_breaker_recovery_seconds,
+            )
 
         if embedder is not None:
             self.embedder = embedder
@@ -70,6 +76,26 @@ class SimpleRAG:
         # Document store (simple in-memory)
         self.documents: List[Dict[str, Any]] = []
         self.embeddings: List[list] = []
+
+        # Pre-computed numpy matrix and norms (built after document load)
+        self._doc_matrix: Optional[np.ndarray] = None
+        self._doc_norms: Optional[np.ndarray] = None
+
+        # BM25 index (optional - if rank_bm25 is installed)
+        self._bm25_index = None
+        self._bm25_available = False
+        try:
+            from rank_bm25 import BM25Okapi
+            self._bm25_available = True
+            logger.info("BM25 search enabled")
+        except ImportError:
+            logger.info("BM25 not available (rank_bm25 not installed) - using semantic-only search")
+
+        # Thread safety for reload
+        self._lock = threading.Lock()
+
+        # Store embedding model name for cache key stability
+        self._embedding_model_name = embedding_model
 
         # Excel processor and financial analyzer (lazy loaded)
         self._excel_processor = None
@@ -109,9 +135,14 @@ class SimpleRAG:
     # ------------------------------------------------------------------
 
     def _embedding_cache_key(self, file_path: Path) -> str:
-        """Generate a cache key from filename + modification time."""
-        mtime = file_path.stat().st_mtime
-        return hashlib.sha256(f"{file_path.name}:{mtime}".encode()).hexdigest()
+        """Generate a cache key from content hash + embedding model.
+
+        Uses SHA-256 of file content instead of mtime, so unchanged files
+        won't be re-embedded even after a touch/copy operation.
+        """
+        content_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        key_str = f"{file_path.name}:{content_hash}:{self._embedding_model_name}"
+        return hashlib.sha256(key_str.encode()).hexdigest()
 
     def _load_cached_embeddings(self, cache_key: str):
         """Load cached embeddings from disk via joblib, or return None."""
@@ -211,8 +242,39 @@ class SimpleRAG:
 
         if self.documents:
             logger.info(f"Total: {len(self.documents)} chunks indexed")
+            self._build_embedding_index()
+            self._build_bm25_index()
         else:
             logger.warning("No documents found in the documents folder")
+
+    def _build_embedding_index(self):
+        """Pre-compute the numpy doc matrix and norms for fast retrieval."""
+        if not self.embeddings:
+            self._doc_matrix = None
+            self._doc_norms = None
+            return
+        self._doc_matrix = np.asarray(self.embeddings, dtype=np.float32)
+        norms = np.linalg.norm(self._doc_matrix, axis=1)
+        # Replace zero norms with 1.0 to avoid division by zero
+        self._doc_norms = np.where(norms == 0, 1.0, norms)
+
+    def _build_bm25_index(self):
+        """Build BM25 index for keyword search."""
+        if not self._bm25_available or not self.documents:
+            self._bm25_index = None
+            return
+
+        try:
+            from rank_bm25 import BM25Okapi
+            # Tokenize all document contents (simple whitespace + lowercase)
+            tokenized_corpus = [
+                doc["content"].lower().split() for doc in self.documents
+            ]
+            self._bm25_index = BM25Okapi(tokenized_corpus)
+            logger.info("BM25 index built successfully")
+        except Exception as e:
+            logger.warning(f"Failed to build BM25 index: {e}")
+            self._bm25_index = None
 
     def _process_excel_file(self, file_path: Path) -> List[Dict[str, Any]]:
         """Process Excel file into RAG-compatible document chunks."""
@@ -241,20 +303,21 @@ class SimpleRAG:
 
     def _cosine_similarity(self, vec1: list, vec2: list) -> float:
         """Calculate cosine similarity between two vectors."""
-        import math
-
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-        norm1 = math.sqrt(sum(a * a for a in vec1))
-        norm2 = math.sqrt(sum(b * b for b in vec2))
-
-        if norm1 == 0 or norm2 == 0:
+        a = np.asarray(vec1, dtype=np.float32)
+        b = np.asarray(vec2, dtype=np.float32)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
             return 0.0
-
-        return dot_product / (norm1 * norm2)
+        return float(np.dot(a, b) / (norm_a * norm_b))
 
     def retrieve(self, query: str, top_k: int = 3) -> list:
         """
-        Retrieve the most relevant documents for a query.
+        Retrieve the most relevant documents for a query using hybrid search.
+
+        Combines semantic (embedding-based) and keyword (BM25) search using
+        Reciprocal Rank Fusion (RRF) if BM25 is available, otherwise falls
+        back to semantic-only search.
 
         Args:
             query: User's question
@@ -269,27 +332,155 @@ class SimpleRAG:
         # Clamp top_k to valid range
         top_k = max(1, min(top_k, settings.max_top_k, len(self.documents)))
 
+        # If BM25 is not available, fall back to semantic-only search
+        if not self._bm25_available or self._bm25_index is None:
+            return self._semantic_search(query, top_k)
+
+        # Perform both semantic and BM25 search
+        semantic_results = self._semantic_search(query, top_k * 2)  # Get more for fusion
+        bm25_results = self._bm25_search(query, top_k * 2)
+
+        # Fuse results using Reciprocal Rank Fusion
+        fused_results = self._fuse_results_rrf(semantic_results, bm25_results, top_k)
+        return fused_results
+
+    def _semantic_search(self, query: str, top_k: int) -> list:
+        """
+        Perform semantic search using embeddings.
+
+        Args:
+            query: User's question
+            top_k: Number of documents to retrieve
+
+        Returns:
+            List of relevant document chunks
+        """
+        if not self.documents:
+            return []
+
+        # Clamp top_k to valid range
+        top_k = max(1, min(top_k, len(self.documents)))
+
         # Embed the query
         query_embedding = self.embedder.embed(query)
+        query_vec = np.asarray(query_embedding, dtype=np.float32)
+        query_norm = np.linalg.norm(query_vec)
 
-        # Calculate similarities
-        similarities = []
-        for i, doc_embedding in enumerate(self.embeddings):
-            sim = self._cosine_similarity(query_embedding, doc_embedding)
-            similarities.append((i, sim))
+        if query_norm == 0:
+            return self.documents[:top_k]
 
-        # Sort by similarity and get top_k
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        top_indices = [idx for idx, _ in similarities[:top_k]]
+        # Use pre-computed matrix and norms (falls back to on-the-fly if not built)
+        if self._doc_matrix is not None and self._doc_norms is not None:
+            similarities = self._doc_matrix @ query_vec / (self._doc_norms * query_norm)
+        else:
+            doc_matrix = np.asarray(self.embeddings, dtype=np.float32)
+            norms = np.linalg.norm(doc_matrix, axis=1)
+            safe_norms = np.where(norms == 0, 1.0, norms)
+            similarities = doc_matrix @ query_vec / (safe_norms * query_norm)
+
+        # Use argpartition for O(n) partial sort when doc count >> top_k
+        if len(similarities) > top_k * 4:
+            partitioned = np.argpartition(similarities, -top_k)[-top_k:]
+            top_indices = partitioned[np.argsort(similarities[partitioned])][::-1]
+        else:
+            top_indices = np.argsort(similarities)[-top_k:][::-1]
 
         return [self.documents[i] for i in top_indices]
 
-    def answer(self, query: str) -> str:
+    def _bm25_search(self, query: str, top_k: int) -> list:
+        """
+        Perform BM25 keyword search.
+
+        Args:
+            query: User's question
+            top_k: Number of documents to retrieve
+
+        Returns:
+            List of relevant document chunks
+        """
+        if not self._bm25_index or not self.documents:
+            return []
+
+        # Clamp top_k to valid range
+        top_k = max(1, min(top_k, len(self.documents)))
+
+        # Tokenize query (same way as corpus)
+        tokenized_query = query.lower().split()
+
+        # Get BM25 scores
+        scores = self._bm25_index.get_scores(tokenized_query)
+
+        # Get top-k indices
+        if len(scores) > top_k * 4:
+            partitioned = np.argpartition(scores, -top_k)[-top_k:]
+            top_indices = partitioned[np.argsort(scores[partitioned])][::-1]
+        else:
+            top_indices = np.argsort(scores)[-top_k:][::-1]
+
+        return [self.documents[i] for i in top_indices]
+
+    def _fuse_results_rrf(
+        self,
+        semantic_results: list,
+        bm25_results: list,
+        top_k: int
+    ) -> list:
+        """
+        Fuse semantic and BM25 results using Reciprocal Rank Fusion.
+
+        RRF formula: score(d) = sum over systems s of: weight_s / (k + rank_s(d))
+        where k is typically 60 (default RRF constant).
+
+        Args:
+            semantic_results: Results from semantic search
+            bm25_results: Results from BM25 search
+            top_k: Number of final results to return
+
+        Returns:
+            Fused list of document chunks
+        """
+        # Build rank maps (doc_id -> rank) for each system
+        semantic_ranks = {id(doc): rank for rank, doc in enumerate(semantic_results)}
+        bm25_ranks = {id(doc): rank for rank, doc in enumerate(bm25_results)}
+
+        # Get all unique documents
+        all_docs = {}
+        for doc in semantic_results + bm25_results:
+            all_docs[id(doc)] = doc
+
+        # Calculate RRF scores
+        rrf_scores = {}
+        k = settings.rrf_k
+
+        for doc_id, doc in all_docs.items():
+            score = 0.0
+
+            # Semantic contribution
+            if doc_id in semantic_ranks:
+                score += settings.semantic_weight / (k + semantic_ranks[doc_id])
+
+            # BM25 contribution
+            if doc_id in bm25_ranks:
+                score += settings.bm25_weight / (k + bm25_ranks[doc_id])
+
+            rrf_scores[doc_id] = score
+
+        # Sort by RRF score and return top-k
+        sorted_docs = sorted(
+            all_docs.items(),
+            key=lambda x: rrf_scores[x[0]],
+            reverse=True
+        )[:top_k]
+
+        return [doc for doc_id, doc in sorted_docs]
+
+    def answer(self, query: str, retrieved_docs: Optional[List[Dict[str, Any]]] = None) -> str:
         """
         Answer a question using RAG with financial analysis support.
 
         Args:
             query: User's question
+            retrieved_docs: Pre-retrieved documents (avoids double retrieval)
 
         Returns:
             Generated answer
@@ -298,8 +489,8 @@ class SimpleRAG:
         if len(query) > settings.max_query_length:
             return f"Query too long. Maximum length is {settings.max_query_length} characters."
 
-        # Retrieve relevant documents
-        relevant_docs = self.retrieve(query, top_k=settings.top_k)
+        # Retrieve relevant documents (reuse if already provided)
+        relevant_docs = retrieved_docs if retrieved_docs is not None else self.retrieve(query, top_k=settings.top_k)
 
         if not relevant_docs:
             return "No documents loaded. Please add PDF, text, or Excel files to the 'documents' folder."
@@ -346,6 +537,89 @@ Answer:"""
             return answer.strip()
         except Exception as e:
             return f"Error generating answer: {e}"
+
+    def retrieve_with_decomposition(self, query: str, top_k: int = 3) -> list:
+        """Retrieve using query decomposition for improved recall.
+
+        Expands the original query into multiple sub-queries targeting
+        different aspects, retrieves for each, and deduplicates results
+        using source+content identity.
+
+        Args:
+            query: User's question
+            top_k: Number of final documents to return
+
+        Returns:
+            Deduplicated list of relevant document chunks
+        """
+        sub_queries = self._decompose_query(query)
+
+        # Retrieve for each sub-query
+        all_results = []
+        seen_keys = set()
+
+        for sq in sub_queries:
+            results = self.retrieve(sq, top_k=top_k)
+            for doc in results:
+                # Deduplicate by source + first 200 chars of content
+                key = (doc.get('source', ''), doc.get('content', '')[:200])
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_results.append(doc)
+
+        return all_results[:top_k]
+
+    def _decompose_query(self, query: str) -> list:
+        """Decompose a complex query into sub-queries for multi-query retrieval.
+
+        Uses keyword-based expansion (no LLM call) to generate variations
+        that capture different aspects of the question.
+
+        Args:
+            query: Original user query
+
+        Returns:
+            List of sub-queries including the original
+        """
+        sub_queries = [query]  # Always include original
+        query_lower = query.lower()
+
+        # Financial aspect expansions
+        expansions = {
+            'profitability': ['revenue', 'net income', 'margin', 'profit'],
+            'liquidity': ['current ratio', 'cash', 'working capital'],
+            'leverage': ['debt', 'equity', 'interest coverage'],
+            'efficiency': ['asset turnover', 'inventory turnover', 'receivables'],
+            'growth': ['revenue growth', 'trend', 'year over year'],
+            'risk': ['z-score', 'bankruptcy', 'distress', 'leverage'],
+            'cash flow': ['operating cash flow', 'free cash flow', 'capex'],
+            'valuation': ['roe', 'roa', 'roic', 'earnings'],
+        }
+
+        # Find which aspects the query touches
+        matched_aspects = []
+        for aspect, keywords in expansions.items():
+            if any(kw in query_lower for kw in keywords) or aspect in query_lower:
+                matched_aspects.append(aspect)
+
+        # Generate sub-queries for related aspects
+        if matched_aspects:
+            for aspect in matched_aspects:
+                for keyword in expansions[aspect]:
+                    if keyword not in query_lower:
+                        sub_queries.append(f"{query} {keyword}")
+                        if len(sub_queries) >= 4:  # Cap at 4 sub-queries
+                            return sub_queries
+
+        # If no financial aspects matched, add simple reformulations
+        if len(sub_queries) == 1:
+            # Add a specificity variant
+            if '?' in query:
+                sub_queries.append(query.replace('?', ' details?'))
+            else:
+                sub_queries.append(f"details about {query}")
+
+        return sub_queries[:4]
 
     def _is_financial_query(self, query: str) -> bool:
         """Check if query involves financial analysis."""
@@ -394,11 +668,78 @@ If performing calculations, show your work.
 
 Answer:"""
 
+    def answer_stream(self, query: str, retrieved_docs: Optional[List[Dict[str, Any]]] = None):
+        """Stream an answer using RAG with financial analysis support.
+
+        Falls back to non-streaming if the LLM doesn't support streaming.
+
+        Args:
+            query: User's question
+            retrieved_docs: Pre-retrieved documents (avoids double retrieval)
+
+        Yields:
+            str: Text chunks as they arrive from the LLM
+        """
+        if len(query) > settings.max_query_length:
+            yield f"Query too long. Maximum length is {settings.max_query_length} characters."
+            return
+
+        relevant_docs = retrieved_docs if retrieved_docs is not None else self.retrieve(query, top_k=settings.top_k)
+
+        if not relevant_docs:
+            yield "No documents loaded. Please add PDF, text, or Excel files to the 'documents' folder."
+            return
+
+        is_financial = self._is_financial_query(query)
+
+        context_parts = []
+        excel_data = []
+
+        for doc in relevant_docs:
+            source_info = f"[Source: {doc['source']}]"
+            doc_type = doc.get('type', 'unknown')
+
+            if doc_type == 'excel':
+                financial_type = doc.get('metadata', {}).get('financial_type', '')
+                if financial_type:
+                    source_info += f" [Type: {financial_type}]"
+                excel_data.append(doc)
+
+            context_parts.append(f"{source_info}\n{doc['content']}")
+
+        context = "\n\n".join(context_parts)
+
+        if is_financial and self.charlie_analyzer and excel_data:
+            prompt = self._build_financial_prompt(query, context, excel_data)
+        else:
+            prompt = f"""You are a helpful assistant that answers questions based on the provided context.
+Use ONLY the information from the context to answer. If the answer is not in the context, say so.
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+
+        try:
+            if hasattr(self.llm, 'generate_stream'):
+                yield from self.llm.generate_stream(prompt)
+            else:
+                answer = self.llm.generate(prompt)
+                yield answer.strip()
+        except Exception as e:
+            yield f"Error generating answer: {e}"
+
     def reload_documents(self):
-        """Reload documents from the folder."""
-        self.documents = []
-        self.embeddings = []
-        self._load_documents()
+        """Reload documents from the folder (thread-safe)."""
+        with self._lock:
+            self.documents = []
+            self.embeddings = []
+            self._doc_matrix = None
+            self._doc_norms = None
+            self._bm25_index = None
+            self._load_documents()
 
 
 # CLI-only entry point (not used by Streamlit - see streamlit_app_local.py)

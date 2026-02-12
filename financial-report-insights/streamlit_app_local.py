@@ -153,10 +153,24 @@ def render_sidebar():
     return page
 
 
+def _render_system_status():
+    """Show Ollama connection status in sidebar (cached to avoid repeated checks)."""
+    try:
+        from healthcheck import check_ollama_connection
+        result = check_ollama_connection(os.environ.get("OLLAMA_HOST"))
+        if result["status"] == "ok":
+            st.sidebar.success("Ollama: Connected")
+        else:
+            st.sidebar.error(f"Ollama: {result['detail']}")
+    except Exception:
+        st.sidebar.warning("Ollama: Status unknown")
+
+
 def main():
     """Main application entry point."""
     # Render sidebar and get selected page
     page = render_sidebar()
+    _render_system_status()
 
     # Route to appropriate page
     if page == "Q&A Chat":
@@ -230,35 +244,36 @@ def render_qa_page():
         # Submit button
         if st.button("🔍 Get Answer", type="primary") or (user_query and st.session_state.get('submit_query')):
             if user_query:
-                with st.spinner("Searching documents and generating answer..."):
-                    try:
-                        # Get answer
-                        answer = rag.answer(user_query)
+                try:
+                    # Retrieve documents (fast, with spinner)
+                    with st.spinner("Searching documents..."):
+                        relevant_docs = rag.retrieve(user_query, top_k=settings.top_k)
 
-                        # Display answer
-                        st.markdown("### Answer")
-                        st.markdown(answer)
+                    # Stream the answer (tokens appear as they arrive)
+                    st.markdown("### Answer")
+                    answer = st.write_stream(
+                        rag.answer_stream(user_query, retrieved_docs=relevant_docs)
+                    )
 
-                        # Show retrieved documents
-                        with st.expander("📄 Retrieved Context"):
-                            relevant_docs = rag.retrieve(user_query, top_k=3)
-                            for i, doc in enumerate(relevant_docs, 1):
-                                doc_type = doc.get('type', 'unknown')
-                                icon = {"excel": "📊", "pdf": "📄", "text": "📝"}.get(doc_type, "📁")
-                                st.markdown(f"**Source {i}:** {icon} {doc['source']}")
-                                content = doc['content']
-                                st.text(content[:500] + "..." if len(content) > 500 else content)
-                                st.divider()
+                    # Show retrieved documents (reusing same results)
+                    with st.expander("📄 Retrieved Context"):
+                        for i, doc in enumerate(relevant_docs, 1):
+                            doc_type = doc.get('type', 'unknown')
+                            icon = {"excel": "📊", "pdf": "📄", "text": "📝"}.get(doc_type, "📁")
+                            st.markdown(f"**Source {i}:** {icon} {doc['source']}")
+                            content = doc['content']
+                            st.text(content[:500] + "..." if len(content) > 500 else content)
+                            st.divider()
 
-                        # Add to history
-                        st.session_state.chat_history.append({
-                            "query": user_query,
-                            "answer": answer
-                        })
+                    # Add to history
+                    st.session_state.chat_history.append({
+                        "query": user_query,
+                        "answer": answer
+                    })
 
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        st.warning("Make sure Ollama is running with the selected model")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    st.warning("Make sure Ollama is running with the selected model")
 
     with col2:
         st.subheader("💬 History")

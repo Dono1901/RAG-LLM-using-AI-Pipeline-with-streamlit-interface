@@ -73,12 +73,13 @@ class FinancialInsightsPage:
                     st.session_state['analysis_results'] = self.analyzer.analyze(df)
 
                     # Main content tabs
-                    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                         "Executive Summary",
                         "Financial Ratios",
                         "Trends & Forecasts",
                         "Budget Analysis",
-                        "Cash Flow"
+                        "Cash Flow",
+                        "Scoring Models",
                     ])
 
                     with tab1:
@@ -91,6 +92,8 @@ class FinancialInsightsPage:
                         self._render_budget_dashboard(df, workbook)
                     with tab5:
                         self._render_cashflow_dashboard(df)
+                    with tab6:
+                        self._render_scoring_models(df)
 
                     # Data explorer at bottom
                     self._render_data_explorer(df, workbook)
@@ -111,11 +114,14 @@ class FinancialInsightsPage:
         selected_name = st.selectbox("Select File", file_names)
         selected_file = excel_files[file_names.index(selected_name)] if selected_name else None
 
-        # Sheet selection
+        # Sheet selection (reuse cached workbook to avoid double load)
         selected_sheet = None
         if selected_file:
             try:
-                workbook = self.processor.load_workbook(selected_file)
+                cache_key = f"_wb_{selected_file}"
+                if cache_key not in st.session_state:
+                    st.session_state[cache_key] = self.processor.load_workbook(selected_file)
+                workbook = st.session_state[cache_key]
                 sheet_names = [s.name for s in workbook.sheets]
                 if sheet_names:
                     selected_sheet = st.selectbox("Select Sheet", ["All Sheets"] + sheet_names)
@@ -665,6 +671,162 @@ class FinancialInsightsPage:
             with col3:
                 st.metric("Net Working Capital", self.viz.format_currency(wc_analysis.net_working_capital))
 
+    def _render_scoring_models(self, df: pd.DataFrame):
+        """Render Scoring Models dashboard: DuPont, Z-Score, F-Score, Composite Health."""
+        st.subheader("Scoring Models")
+
+        analysis = st.session_state.get('analysis_results', {})
+        dupont = analysis.get('dupont')
+        z_result = analysis.get('altman_z_score')
+        f_result = analysis.get('piotroski_f_score')
+        health = analysis.get('composite_health')
+
+        # --- Row 1: Composite Health Score ---
+        if health is not None:
+            st.markdown("**Composite Financial Health**")
+            col1, col2, col3 = st.columns([1, 1, 2])
+
+            with col1:
+                st.metric("Health Score", f"{health.score}/100")
+            with col2:
+                grade_colors = {'A': 'green', 'B': 'blue', 'C': 'orange', 'D': 'red', 'F': 'red'}
+                color = grade_colors.get(health.grade, 'gray')
+                st.markdown(f"**Grade:** :{color}[**{health.grade}**]")
+            with col3:
+                if health.interpretation:
+                    st.info(health.interpretation)
+
+            # Component breakdown bar chart
+            if health.component_scores:
+                import plotly.graph_objects as go
+                components = list(health.component_scores.keys())
+                values = list(health.component_scores.values())
+                max_pts = {'z_score': 25, 'f_score': 25, 'profitability': 20,
+                           'liquidity': 15, 'leverage': 15}
+                maxes = [max_pts.get(c, 25) for c in components]
+                labels = [c.replace('_', ' ').title() for c in components]
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=labels, y=values, name='Score',
+                    marker_color='steelblue', text=values, textposition='auto',
+                ))
+                fig.add_trace(go.Bar(
+                    x=labels, y=[m - v for m, v in zip(maxes, values)],
+                    name='Remaining', marker_color='lightgray',
+                ))
+                fig.update_layout(
+                    barmode='stack', title='Health Score Components',
+                    yaxis_title='Points', height=300,
+                    showlegend=False, margin=dict(t=40, b=20),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
+
+        # --- Row 2: Altman Z-Score and Piotroski F-Score side by side ---
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.markdown("**Altman Z-Score**")
+            if z_result and z_result.z_score is not None:
+                zone_colors = {'safe': 'green', 'grey': 'orange', 'distress': 'red', 'partial': 'gray'}
+                zone_color = zone_colors.get(z_result.zone, 'gray')
+                st.metric("Z-Score", f"{z_result.z_score:.2f}")
+                st.markdown(f"Zone: :{zone_color}[**{z_result.zone.title()}**]")
+
+                # Z-Score gauge
+                fig = self.viz.create_gauge_chart(
+                    value=z_result.z_score,
+                    title="Altman Z-Score",
+                    min_val=0, max_val=5,
+                    thresholds={'warning': 1.81, 'good': 2.99},
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Components table
+                if z_result.components:
+                    st.markdown("**Components:**")
+                    comp_labels = {
+                        'x1': 'Working Capital / Assets',
+                        'x2': 'Retained Earnings / Assets',
+                        'x3': 'EBIT / Assets',
+                        'x4': 'Equity / Liabilities',
+                        'x5': 'Sales / Assets',
+                    }
+                    for k, v in z_result.components.items():
+                        if v is not None:
+                            label = comp_labels.get(k, k)
+                            st.caption(f"{k.upper()}: {label} = {v:.4f}")
+            else:
+                st.info("Insufficient data for Z-Score calculation. Requires total assets, "
+                        "current assets/liabilities, retained earnings, EBIT, equity, "
+                        "liabilities, and revenue.")
+
+        with col_right:
+            st.markdown("**Piotroski F-Score**")
+            if f_result:
+                st.metric("F-Score", f"{f_result.score}/{f_result.max_score}")
+
+                if f_result.score >= 7:
+                    strength = "Strong"
+                    strength_color = "green"
+                elif f_result.score >= 4:
+                    strength = "Moderate"
+                    strength_color = "orange"
+                else:
+                    strength = "Weak"
+                    strength_color = "red"
+                st.markdown(f"Strength: :{strength_color}[**{strength}**]")
+
+                # Criteria checklist
+                if f_result.criteria:
+                    st.markdown("**Criteria:**")
+                    for criterion, passed in f_result.criteria.items():
+                        icon = "+" if passed else "-"
+                        label = criterion.replace('_', ' ').title()
+                        st.caption(f"{icon} {label}")
+            else:
+                st.info("Insufficient data for F-Score calculation.")
+
+        st.divider()
+
+        # --- Row 3: DuPont Decomposition ---
+        st.markdown("**DuPont ROE Decomposition**")
+        if dupont and dupont.roe is not None:
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("ROE", f"{dupont.roe:.1%}")
+            with col2:
+                if dupont.net_margin is not None:
+                    st.metric("Net Margin", f"{dupont.net_margin:.1%}")
+            with col3:
+                if dupont.asset_turnover is not None:
+                    st.metric("Asset Turnover", f"{dupont.asset_turnover:.2f}x")
+            with col4:
+                if dupont.equity_multiplier is not None:
+                    st.metric("Equity Multiplier", f"{dupont.equity_multiplier:.2f}x")
+
+            if dupont.primary_driver:
+                st.caption(f"Primary ROE driver: {dupont.primary_driver.replace('_', ' ').title()}")
+
+            # 5-factor extensions
+            if dupont.tax_burden is not None or dupont.interest_burden is not None:
+                st.markdown("**5-Factor Extensions:**")
+                ext_col1, ext_col2 = st.columns(2)
+                with ext_col1:
+                    if dupont.tax_burden is not None:
+                        st.metric("Tax Burden (NI/EBT)", f"{dupont.tax_burden:.1%}")
+                with ext_col2:
+                    if dupont.interest_burden is not None:
+                        st.metric("Interest Burden (EBT/EBIT)", f"{dupont.interest_burden:.1%}")
+
+            if dupont.interpretation:
+                st.info(dupont.interpretation)
+        else:
+            st.info("DuPont analysis requires net income, revenue, total assets, and total equity.")
+
     def _render_data_explorer(self, df: pd.DataFrame, workbook: WorkbookData):
         """Render data exploration section."""
         with st.expander("Data Explorer", expanded=False):
@@ -707,7 +869,7 @@ class FinancialInsightsPage:
             )
 
     @staticmethod
-    @st.cache_data(ttl=300)
+    @st.cache_data(ttl=3600)
     def _extract_key_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         """Extract key financial metrics from DataFrame."""
         metrics = {}
@@ -724,7 +886,7 @@ class FinancialInsightsPage:
                 if 'revenue' not in metrics:
                     try:
                         metrics['revenue'] = df[col].sum() if len(df) > 1 else df[col].iloc[0]
-                    except:
+                    except (TypeError, ValueError, IndexError):
                         pass
 
             # Net Income
@@ -732,7 +894,7 @@ class FinancialInsightsPage:
                 if 'net_income' not in metrics:
                     try:
                         metrics['net_income'] = df[col].sum() if len(df) > 1 else df[col].iloc[0]
-                    except:
+                    except (TypeError, ValueError, IndexError):
                         pass
 
         return metrics
