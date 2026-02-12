@@ -100,6 +100,7 @@ class SimpleRAG:
         # Excel processor and financial analyzer (lazy loaded)
         self._excel_processor = None
         self._charlie_analyzer = None
+        self._financial_analysis_cache = None
 
         # Embedding cache directory
         self._cache_dir = Path(settings.embedding_cache_dir)
@@ -129,6 +130,79 @@ class SimpleRAG:
             except ImportError:
                 logger.warning("Financial analyzer not available.")
         return self._charlie_analyzer
+
+    # ------------------------------------------------------------------
+    # Financial analysis context for RAG
+    # ------------------------------------------------------------------
+
+    def _get_financial_analysis_context(self) -> str:
+        """Compute and cache financial analysis from Excel data for LLM context.
+
+        Scans loaded Excel files, runs CharlieAnalyzer on DataFrames,
+        and formats results as concise text for prompt injection.
+
+        Returns:
+            Formatted analysis text, or empty string if unavailable.
+        """
+        if self._financial_analysis_cache is not None:
+            return self._financial_analysis_cache
+
+        if not self.charlie_analyzer or not self.excel_processor:
+            self._financial_analysis_cache = ""
+            return ""
+
+        try:
+            excel_files = self.excel_processor.scan_for_excel_files()
+            if not excel_files:
+                self._financial_analysis_cache = ""
+                return ""
+
+            analysis_parts = []
+
+            for file_path in excel_files[:3]:
+                try:
+                    workbook = self.excel_processor.load_workbook(file_path)
+                    combined = self.excel_processor.combine_sheets_intelligently(workbook)
+
+                    # Try merged DataFrame first, then individual sheets
+                    dfs_to_analyze = []
+                    if combined.merged_df is not None and not combined.merged_df.empty:
+                        dfs_to_analyze.append((file_path.name, combined.merged_df))
+                    else:
+                        for sheet in workbook.sheets[:3]:
+                            if not sheet.df.empty:
+                                dfs_to_analyze.append(
+                                    (f"{file_path.name}/{sheet.name}", sheet.df)
+                                )
+
+                    for source_name, df in dfs_to_analyze:
+                        financial_data = self.charlie_analyzer._dataframe_to_financial_data(df)
+
+                        # Only analyze if we have meaningful data
+                        if financial_data.revenue is None and financial_data.total_assets is None:
+                            continue
+
+                        report = self.charlie_analyzer.generate_report(financial_data)
+
+                        analysis_parts.append(
+                            f"=== Computed Analysis: {source_name} ===\n"
+                            f"{report.executive_summary}\n\n"
+                            f"Key Ratios:\n{report.sections.get('ratio_analysis', 'N/A')}\n\n"
+                            f"Scoring Models:\n{report.sections.get('scoring_models', 'N/A')}\n\n"
+                            f"Risk Assessment:\n{report.sections.get('risk_assessment', 'N/A')}"
+                        )
+                        break  # One analysis per file
+
+                except Exception as e:
+                    logger.debug(f"Could not analyze {file_path.name}: {e}")
+
+            self._financial_analysis_cache = "\n\n".join(analysis_parts) if analysis_parts else ""
+
+        except Exception as e:
+            logger.debug(f"Financial analysis context generation failed: {e}")
+            self._financial_analysis_cache = ""
+
+        return self._financial_analysis_cache
 
     # ------------------------------------------------------------------
     # Embedding cache helpers
@@ -628,23 +702,26 @@ Answer:"""
             'cash flow', 'budget', 'variance', 'roe', 'roa', 'roi',
             'liquidity', 'leverage', 'debt', 'equity', 'asset', 'liability',
             'growth', 'trend', 'forecast', 'analysis', 'financial',
-            'balance sheet', 'income statement', 'p&l', 'cfo', 'ebitda'
+            'balance sheet', 'income statement', 'p&l', 'cfo', 'ebitda',
+            'z-score', 'zscore', 'f-score', 'fscore', 'piotroski', 'altman',
+            'dupont', 'health score', 'composite', 'working capital',
+            'bankruptcy', 'distress', 'scoring', 'grade',
         ]
         query_lower = query.lower()
         return any(keyword in query_lower for keyword in financial_keywords)
 
     def _build_financial_prompt(self, query: str, context: str, excel_data: List[Dict]) -> str:
-        """Build an enhanced prompt for financial queries."""
-        analysis_text = ""
+        """Build an enhanced prompt for financial queries with computed analysis."""
+        # Get pre-computed analysis results (cached after first call)
+        computed_analysis = self._get_financial_analysis_context()
 
-        if self.charlie_analyzer:
-            try:
-                for doc in excel_data[:1]:
-                    table_struct = doc.get('metadata', {}).get('table_structure', {})
-                    if table_struct:
-                        analysis_text = f"\nDetected data structure: {table_struct.get('type', 'financial data')}"
-            except Exception as e:
-                logger.debug(f"Could not run financial analysis: {e}")
+        # Build the computed analysis section
+        computed_section = ""
+        if computed_analysis:
+            computed_section = f"""
+COMPUTED FINANCIAL ANALYSIS (use these exact values when answering):
+{computed_analysis}
+"""
 
         return f"""You are a senior financial analyst with CFO-level expertise, inspired by Charlie Munger's
 analytical framework. Focus on fundamentals, cash flow, and sustainable competitive advantages.
@@ -653,8 +730,7 @@ USER QUERY: {query}
 
 FINANCIAL DATA CONTEXT:
 {context}
-{analysis_text}
-
+{computed_section}
 ANALYSIS FRAMEWORK (Charlie Munger approach):
 1. What are the key value drivers?
 2. What could go wrong? (Inversion thinking)
@@ -663,6 +739,7 @@ ANALYSIS FRAMEWORK (Charlie Munger approach):
 5. Look for sustainable competitive advantages
 
 Provide a comprehensive, actionable analysis addressing the query.
+When computed ratios, scores, or grades are available above, cite those EXACT values.
 Include specific numbers from the data and cite your sources.
 If performing calculations, show your work.
 
@@ -739,6 +816,7 @@ Answer:"""
             self._doc_matrix = None
             self._doc_norms = None
             self._bm25_index = None
+            self._financial_analysis_cache = None
             self._load_documents()
 
 

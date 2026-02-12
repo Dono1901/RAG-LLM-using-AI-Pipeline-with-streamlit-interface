@@ -95,6 +95,9 @@ class FinancialInsightsPage:
                     with tab6:
                         self._render_scoring_models(df)
 
+                    # Report download
+                    self._render_report_download(df)
+
                     # Data explorer at bottom
                     self._render_data_explorer(df, workbook)
 
@@ -826,6 +829,187 @@ class FinancialInsightsPage:
                 st.info(dupont.interpretation)
         else:
             st.info("DuPont analysis requires net income, revenue, total assets, and total equity.")
+
+        # --- Row 4: Industry Benchmark Comparison ---
+        st.divider()
+        self._render_industry_benchmarks(analysis)
+
+    # Industry benchmarks (general cross-industry averages)
+    INDUSTRY_BENCHMARKS = {
+        'current_ratio': {'label': 'Current Ratio', 'benchmark': 1.5, 'good': 2.0, 'unit': 'x'},
+        'quick_ratio': {'label': 'Quick Ratio', 'benchmark': 1.0, 'good': 1.5, 'unit': 'x'},
+        'net_margin': {'label': 'Net Margin', 'benchmark': 0.08, 'good': 0.15, 'unit': '%'},
+        'roe': {'label': 'Return on Equity', 'benchmark': 0.12, 'good': 0.20, 'unit': '%'},
+        'roa': {'label': 'Return on Assets', 'benchmark': 0.06, 'good': 0.10, 'unit': '%'},
+        'debt_to_equity': {'label': 'Debt to Equity', 'benchmark': 1.0, 'good': 0.5, 'unit': 'x', 'lower_is_better': True},
+        'interest_coverage': {'label': 'Interest Coverage', 'benchmark': 3.0, 'good': 6.0, 'unit': 'x'},
+        'asset_turnover': {'label': 'Asset Turnover', 'benchmark': 0.8, 'good': 1.2, 'unit': 'x'},
+        'gross_margin': {'label': 'Gross Margin', 'benchmark': 0.35, 'good': 0.50, 'unit': '%'},
+        'operating_margin': {'label': 'Operating Margin', 'benchmark': 0.10, 'good': 0.20, 'unit': '%'},
+    }
+
+    def _render_industry_benchmarks(self, analysis: Dict[str, Any]):
+        """Render industry benchmark comparisons for key financial ratios."""
+        st.markdown("**Industry Benchmark Comparison**")
+
+        # Collect company ratios from analysis results
+        company_ratios = {}
+        for category_key in ('liquidity_ratios', 'profitability_ratios', 'leverage_ratios', 'efficiency_ratios'):
+            ratios = analysis.get(category_key, {})
+            for key, value in ratios.items():
+                if value is not None:
+                    company_ratios[key] = value
+
+        if not company_ratios:
+            st.info("No ratio data available for benchmark comparison.")
+            return
+
+        # Build comparison data
+        rows = []
+        for ratio_key, bench in self.INDUSTRY_BENCHMARKS.items():
+            company_val = company_ratios.get(ratio_key)
+            if company_val is None:
+                continue
+
+            lower_is_better = bench.get('lower_is_better', False)
+
+            if lower_is_better:
+                if company_val <= bench['good']:
+                    status = "Above Average"
+                elif company_val <= bench['benchmark']:
+                    status = "Average"
+                else:
+                    status = "Below Average"
+            else:
+                if company_val >= bench['good']:
+                    status = "Above Average"
+                elif company_val >= bench['benchmark']:
+                    status = "Average"
+                else:
+                    status = "Below Average"
+
+            if bench['unit'] == '%':
+                fmt_company = f"{company_val:.1%}"
+                fmt_bench = f"{bench['benchmark']:.1%}"
+            else:
+                fmt_company = f"{company_val:.2f}x"
+                fmt_bench = f"{bench['benchmark']:.2f}x"
+
+            rows.append({
+                'Metric': bench['label'],
+                'Company': fmt_company,
+                'Industry Avg': fmt_bench,
+                'Status': status,
+            })
+
+        if not rows:
+            st.info("No matching benchmarks for available ratios.")
+            return
+
+        bench_df = pd.DataFrame(rows)
+
+        # Color the status column
+        def color_status(val):
+            if val == "Above Average":
+                return "color: green"
+            elif val == "Below Average":
+                return "color: red"
+            return "color: orange"
+
+        styled = bench_df.style.applymap(color_status, subset=['Status'])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        # Plotly comparison chart
+        available_benchmarks = [r for r in rows if r['Status'] != '']
+        if available_benchmarks:
+            import plotly.graph_objects as go
+
+            labels = [r['Metric'] for r in available_benchmarks]
+            # Re-extract raw values for charting
+            company_vals = []
+            bench_vals = []
+            for r in available_benchmarks:
+                ratio_key = next(
+                    k for k, b in self.INDUSTRY_BENCHMARKS.items()
+                    if b['label'] == r['Metric']
+                )
+                cv = company_ratios[ratio_key]
+                bv = self.INDUSTRY_BENCHMARKS[ratio_key]['benchmark']
+                if self.INDUSTRY_BENCHMARKS[ratio_key]['unit'] == '%':
+                    cv *= 100
+                    bv *= 100
+                company_vals.append(round(cv, 2))
+                bench_vals.append(round(bv, 2))
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=labels, y=company_vals,
+                name='Company', marker_color='steelblue',
+            ))
+            fig.add_trace(go.Bar(
+                x=labels, y=bench_vals,
+                name='Industry Avg', marker_color='lightcoral',
+            ))
+            fig.update_layout(
+                barmode='group', title='Company vs Industry Benchmarks',
+                yaxis_title='Value', height=350,
+                margin=dict(t=40, b=20),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    def _render_report_download(self, df: pd.DataFrame):
+        """Render a downloadable financial analysis report."""
+        st.divider()
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            st.subheader("Download Financial Report")
+        with col2:
+            try:
+                financial_data = self.analyzer._dataframe_to_financial_data(df)
+                report = self.analyzer.generate_report(financial_data)
+
+                # Build full report text
+                report_lines = [
+                    "=" * 60,
+                    "FINANCIAL ANALYSIS REPORT",
+                    f"Generated: {report.generated_at}",
+                    "=" * 60,
+                    "",
+                    "EXECUTIVE SUMMARY",
+                    "-" * 40,
+                    report.executive_summary,
+                    "",
+                ]
+
+                for section_key, section_title in [
+                    ('ratio_analysis', 'RATIO ANALYSIS'),
+                    ('scoring_models', 'SCORING MODELS'),
+                    ('risk_assessment', 'RISK ASSESSMENT'),
+                    ('recommendations', 'RECOMMENDATIONS'),
+                    ('period_comparison', 'PERIOD COMPARISON'),
+                ]:
+                    if section_key in report.sections:
+                        report_lines.extend([
+                            section_title,
+                            "-" * 40,
+                            report.sections[section_key],
+                            "",
+                        ])
+
+                report_lines.append("=" * 60)
+                report_text = "\n".join(report_lines)
+
+                st.download_button(
+                    "Download Report",
+                    report_text,
+                    "financial_report.txt",
+                    "text/plain",
+                    type="primary",
+                )
+            except Exception as e:
+                logger.debug(f"Could not generate report: {e}")
+                st.caption("Report unavailable for this data.")
 
     def _render_data_explorer(self, df: pd.DataFrame, workbook: WorkbookData):
         """Render data exploration section."""
