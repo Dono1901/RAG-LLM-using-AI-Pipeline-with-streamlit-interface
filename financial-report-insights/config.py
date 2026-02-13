@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Financial analysis
     default_tax_rate: float = 0.25
 
+    # API
+    api_port: int = 8504
+
     model_config = {"env_prefix": "RAG_"}
 
 

@@ -28,3 +28,12 @@ plotly>=5.18.0,<6.0.0
 
 # Caching
 joblib>=1.3.0,<2.0.0
+
+# API Layer
+fastapi>=0.104.0,<1.0.0
+uvicorn>=0.24.0,<1.0.0
+sse-starlette>=1.6.0,<3.0.0
+httpx>=0.25.0,<1.0.0
+
+# Graph Database (optional - install neo4j to enable)
+neo4j>=5.0.0,<6.0.0

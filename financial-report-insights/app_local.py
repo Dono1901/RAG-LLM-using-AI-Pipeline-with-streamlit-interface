@@ -41,6 +41,7 @@ class SimpleRAG:
         embedding_model: str = "all-MiniLM-L6-v2",
         llm: Optional[LLMProvider] = None,
         embedder: Optional[EmbeddingProvider] = None,
+        store=None,
     ):
         """
         Initialize the RAG system.
@@ -51,6 +52,7 @@ class SimpleRAG:
             embedding_model: Sentence transformer model name (ignored if *embedder* is provided)
             llm: Optional pre-built LLM provider (for dependency injection / testing)
             embedder: Optional pre-built embedding provider (for dependency injection / testing)
+            store: Optional Neo4jStore instance (auto-connects if NEO4J_URI is set and store is None)
         """
         self.docs_folder = Path(docs_folder)
         self.docs_folder.mkdir(exist_ok=True)
@@ -96,6 +98,16 @@ class SimpleRAG:
 
         # Store embedding model name for cache key stability
         self._embedding_model_name = embedding_model
+
+        # Graph store (optional - activates when NEO4J_URI is set)
+        if store is not None:
+            self._graph_store = store
+        else:
+            try:
+                from graph_store import Neo4jStore
+                self._graph_store = Neo4jStore.connect()
+            except ImportError:
+                self._graph_store = None
 
         # Excel processor and financial analyzer (lazy loaded)
         self._excel_processor = None
@@ -183,6 +195,16 @@ class SimpleRAG:
                             continue
 
                         report = self.charlie_analyzer.generate_report(financial_data)
+
+                        # Persist to graph if available
+                        if getattr(self, "_graph_store", None):
+                            try:
+                                from graph_retriever import persist_analysis_to_graph
+                                persist_analysis_to_graph(
+                                    self._graph_store, source_name, source_name, report,
+                                )
+                            except Exception as exc:
+                                logger.debug("Graph persist failed: %s", exc)
 
                         analysis_parts.append(
                             f"=== Computed Analysis: {source_name} ===\n"
@@ -332,6 +354,14 @@ class SimpleRAG:
                     self.documents.extend(file_docs)
                     self.embeddings.extend(embs)
 
+                    # Persist to Neo4j graph store (if available)
+                    if getattr(self, "_graph_store", None):
+                        self._graph_store.store_chunks(
+                            chunks=file_docs,
+                            embeddings=embs,
+                            doc_id=file_docs[0].get("source", str(file_path.name)),
+                        )
+
             except Exception as e:
                 logger.warning(f"Failed to load {file_path}: {e}")
 
@@ -339,6 +369,14 @@ class SimpleRAG:
             logger.info(f"Total: {len(self.documents)} chunks indexed")
             self._build_embedding_index()
             self._build_bm25_index()
+
+            # Ensure Neo4j schema (vector index) after first load
+            if getattr(self, "_graph_store", None) and self.embeddings:
+                try:
+                    dim = len(self.embeddings[0])
+                    self._graph_store.ensure_schema(dim, self._embedding_model_name)
+                except Exception as exc:
+                    logger.warning("Neo4j schema setup failed: %s", exc)
         else:
             logger.warning("No documents found in the documents folder")
 
@@ -443,6 +481,8 @@ class SimpleRAG:
         """
         Perform semantic search using embeddings.
 
+        Tries Neo4j vector index first (if available), falls back to in-memory numpy.
+
         Args:
             query: User's question
             top_k: Number of documents to retrieve
@@ -458,6 +498,23 @@ class SimpleRAG:
 
         # Embed the query
         query_embedding = self.embedder.embed(query)
+
+        # Try Neo4j vector search first
+        if getattr(self, "_graph_store", None):
+            try:
+                neo4j_results = self._graph_store.vector_search(
+                    query_embedding, top_k, self._embedding_model_name,
+                )
+                if neo4j_results:
+                    # Convert Neo4j results to document format
+                    return [
+                        {"source": r.get("source", ""), "content": r.get("content", ""), "type": "unknown"}
+                        for r in neo4j_results
+                    ]
+            except Exception as exc:
+                logger.debug("Neo4j vector search failed, falling back to numpy: %s", exc)
+
+        # In-memory numpy fallback
         query_vec = np.asarray(query_embedding, dtype=np.float32)
         query_norm = np.linalg.norm(query_vec)
 

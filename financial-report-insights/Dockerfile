@@ -45,8 +45,8 @@ RUN printf '[server]\nheadless = true\nmaxUploadSize = 200\n' > /app/.streamlit/
 # Switch to non-root user
 USER appuser
 
-# Expose Streamlit port only
-EXPOSE 8501
+# Expose Streamlit + API ports
+EXPOSE 8501 8504
 
 # Health check using Streamlit's built-in health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -54,7 +54,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Use tini as init process for proper signal forwarding
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["streamlit", "run", "streamlit_app_local.py", \
-    "--server.port=8501", \
-    "--server.address=0.0.0.0", \
-    "--browser.gatherUsageStats=false"]
+CMD ["sh", "-c", \
+    "uvicorn api:app --host 0.0.0.0 --port ${RAG_API_PORT:-8504} --log-level info & \
+     streamlit run streamlit_app_local.py \
+        --server.port=8501 \
+        --server.address=0.0.0.0 \
+        --browser.gatherUsageStats=false"]
