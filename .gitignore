@@ -46,3 +46,13 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Claude Code / tooling state (local only)
+.claude/
+.claude-flow/
+.swarm/
+financial-report-insights/.claude/
+
+# Generated artifacts
+*.bak
+README.pdf

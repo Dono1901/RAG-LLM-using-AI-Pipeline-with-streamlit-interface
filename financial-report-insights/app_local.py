@@ -260,13 +260,28 @@ class SimpleRAG:
             text = file_path.read_text(encoding="utf-8")
             return text if text.strip() else None
 
+        if suffix == ".docx":
+            from docx import Document as DocxDocument
+            doc = DocxDocument(file_path)
+            text = "\n".join(p.text for p in doc.paragraphs)
+            return text if text.strip() else None
+
         return None
 
     def _load_documents(self):
         """Load and process documents from the docs folder (PDF, TXT, MD, Excel, CSV)."""
         logger.info(f"Loading documents from {self.docs_folder}")
 
-        for file_path in self.docs_folder.glob("*"):
+        for file_path in self.docs_folder.rglob("*"):
+            if not file_path.is_file():
+                continue
+            file_size = file_path.stat().st_size
+            if file_size > settings.max_file_size_mb * 1024 * 1024:
+                logger.warning(
+                    f"Skipping {file_path} ({file_size / 1024 / 1024:.1f} MB) "
+                    f"- exceeds {settings.max_file_size_mb} MB limit"
+                )
+                continue
             try:
                 suffix = file_path.suffix.lower()
 
@@ -281,22 +296,28 @@ class SimpleRAG:
 
                 file_docs: List[Dict[str, Any]] = []
 
-                if suffix in (".pdf", ".txt", ".md"):
+                if suffix in (".pdf", ".txt", ".md", ".docx"):
                     text = self._extract_text(file_path)
                     if text:
-                        doc_type = "pdf" if suffix == ".pdf" else "text"
+                        if suffix == ".docx":
+                            doc_type = "docx"
+                        elif suffix == ".pdf":
+                            doc_type = "pdf"
+                        else:
+                            doc_type = "text"
                         chunks = self._chunk_text(
                             text,
                             chunk_size=settings.chunk_size,
                             overlap=settings.chunk_overlap,
                         )
+                        rel_path = str(file_path.relative_to(self.docs_folder))
                         for chunk in chunks:
                             file_docs.append({
-                                "source": file_path.name,
+                                "source": rel_path,
                                 "content": chunk,
                                 "type": doc_type,
                             })
-                        logger.info(f"Loaded {len(chunks)} chunks from {file_path.name}")
+                        logger.info(f"Loaded {len(chunks)} chunks from {rel_path}")
 
                 elif suffix in self.EXCEL_EXTENSIONS:
                     excel_docs = self._process_excel_file(file_path)

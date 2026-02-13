@@ -89,7 +89,7 @@ class TestPathSafety:
 class TestFileSizeLimits:
     def test_max_file_size_setting(self):
         assert settings.max_file_size_mb > 0
-        assert settings.max_file_size_mb == 50  # default
+        assert settings.max_file_size_mb == 200  # updated from 50 in Phase 5+
 
     def test_file_under_limit(self):
         max_bytes = settings.max_file_size_mb * 1024 * 1024

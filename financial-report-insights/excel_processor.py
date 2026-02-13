@@ -124,8 +124,8 @@ class ExcelProcessor:
         """Scan documents folder for all Excel/CSV files."""
         files = []
         for ext in self.SUPPORTED_EXTENSIONS:
-            files.extend(self.documents_path.glob(f"*{ext}"))
-            files.extend(self.documents_path.glob(f"*{ext.upper()}"))
+            files.extend(self.documents_path.rglob(f"*{ext}"))
+            files.extend(self.documents_path.rglob(f"*{ext.upper()}"))
         return sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
 
     def load_workbook(self, file_path: Path) -> WorkbookData:

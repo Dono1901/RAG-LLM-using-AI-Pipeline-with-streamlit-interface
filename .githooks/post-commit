@@ -1,0 +1,69 @@
+#!/bin/bash
+# =============================================================================
+# POST-COMMIT HOOK: Automatic Learning & Session Logging
+# =============================================================================
+# After each successful commit, this hook:
+# 1. Counts the commit number since last consolidation
+# 2. Warns if approaching the 5-phase review gate
+# 3. Updates CONTINUITY.md with the new commit hash
+# 4. Reminds about learning_log.json updates
+# =============================================================================
+
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+COMMIT_HASH=$(git rev-parse --short HEAD)
+COMMIT_MSG=$(git log -1 --format="%s")
+CONTINUITY="$REPO_ROOT/.loki/CONTINUITY.md"
+LEARNING_LOG="$REPO_ROOT/.loki/memory/semantic/learning_log.json"
+
+echo ""
+echo -e "${GREEN}[post-commit] Committed: $COMMIT_HASH - $COMMIT_MSG${NC}"
+
+# ── 1. Count commits since last consolidation tag or marker ──
+CONSOLIDATION_COMMIT=$(git log --all --oneline --grep="Consolidation" --format="%H" | head -1)
+if [ -n "$CONSOLIDATION_COMMIT" ]; then
+    COMMITS_SINCE=$(git rev-list --count "$CONSOLIDATION_COMMIT"..HEAD 2>/dev/null || echo "?")
+else
+    # Count from the initial consolidation commit (this one or the most recent)
+    COMMITS_SINCE=$(git rev-list --count HEAD 2>/dev/null || echo "?")
+fi
+
+echo -e "${CYAN}[post-commit] Commits since last consolidation: $COMMITS_SINCE${NC}"
+
+# ── 2. Review gate warning ──
+if [ "$COMMITS_SINCE" != "?" ]; then
+    REMAINDER=$((COMMITS_SINCE % 5))
+    if [ "$REMAINDER" -eq 0 ] && [ "$COMMITS_SINCE" -gt 0 ]; then
+        echo ""
+        echo -e "${MAGENTA}================================================================${NC}"
+        echo -e "${MAGENTA}  REVIEW GATE: $COMMITS_SINCE commits since consolidation${NC}"
+        echo -e "${MAGENTA}  Time for a dedup audit & consolidation check!${NC}"
+        echo -e "${MAGENTA}  Checklist: .loki/CHECKLIST_QUICK_REFERENCE.md${NC}"
+        echo -e "${MAGENTA}================================================================${NC}"
+        echo ""
+    elif [ "$((5 - REMAINDER))" -eq 1 ]; then
+        echo -e "${YELLOW}[post-commit] Next commit triggers review gate. Plan a dedup check.${NC}"
+    fi
+fi
+
+# ── 3. Remind to update learning log ──
+echo -e "${CYAN}[post-commit] Remember to update: .loki/memory/semantic/learning_log.json${NC}"
+
+# ── 4. Show file size status ──
+ANALYZER="$REPO_ROOT/financial-report-insights/financial_analyzer.py"
+if [ -f "$ANALYZER" ]; then
+    LOC=$(wc -l < "$ANALYZER" | tr -d ' ')
+    if [ "$LOC" -gt 15000 ]; then
+        echo -e "${YELLOW}[post-commit] financial_analyzer.py: $LOC LOC (target: <15,000)${NC}"
+    else
+        echo -e "${GREEN}[post-commit] financial_analyzer.py: $LOC LOC${NC}"
+    fi
+fi
+
+echo -e "${GREEN}[post-commit] Done.${NC}"
+echo ""

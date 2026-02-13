@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     rrf_k: int = 60
 
     # File upload limits
-    max_file_size_mb: int = 50
+    max_file_size_mb: int = 200
     max_query_length: int = 2000
 
     # LLM

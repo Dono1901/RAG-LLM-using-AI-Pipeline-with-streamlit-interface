@@ -34,6 +34,14 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 
+# Project tooling (not needed in image)
+.claude/
+.loki/
+.swarm/
+scripts/
+*.bak
+.streamlit/
+
 # Misc
 *.md
 *.pdf

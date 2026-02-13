@@ -3,7 +3,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama-service
     ports:
-      - "11434:11434"
+      - "11434:11434"  # Exposed for host-side debugging (ollama CLI); remove for tighter isolation
     volumes:
       - ollama-data:/root/.ollama
     environment:
@@ -15,6 +15,8 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
+    networks:
+      - rag-network
     deploy:
       resources:
         reservations:
@@ -30,13 +32,14 @@ services:
     volumes:
       - ./documents:/app/documents
       - app-cache:/app/.cache
+      - huggingface-cache:/app/.cache/huggingface
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - RAG_LLM_MODEL=${RAG_LLM_MODEL:-llama3.2}
       - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       - RAG_CHUNK_SIZE=${RAG_CHUNK_SIZE:-500}
       - RAG_TOP_K=${RAG_TOP_K:-3}
-      - RAG_MAX_FILE_SIZE_MB=${RAG_MAX_FILE_SIZE_MB:-50}
+      - RAG_MAX_FILE_SIZE_MB=${RAG_MAX_FILE_SIZE_MB:-200}
       - RAG_MAX_QUERY_LENGTH=${RAG_MAX_QUERY_LENGTH:-2000}
     depends_on:
       ollama:
@@ -48,17 +51,32 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        reservations:
+          memory: 3G
+        limits:
+          memory: 6G
 
-  # One-time model pull (run with: docker compose run --rm ollama-setup)
+  # One-time model pull (run with: docker compose --profile setup run --rm ollama-setup)
   ollama-setup:
     image: curlimages/curl:latest
     depends_on:
       ollama:
         condition: service_healthy
-    entrypoint: ["curl", "-sf", "-X", "POST", "http://ollama:11434/api/pull", "-d", "{\"name\":\"llama3.2\"}"]
+    entrypoint: ["curl", "-sf", "-m", "1800", "-X", "POST", "http://ollama:11434/api/pull", "-d", "{\"name\":\"llama3.2\"}"]
     profiles:
       - setup
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
 
 volumes:
   ollama-data:
   app-cache:
+  huggingface-cache:

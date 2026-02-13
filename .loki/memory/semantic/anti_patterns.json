@@ -1,0 +1,112 @@
+{
+  "anti_patterns": {
+    "unbounded_phase_generation": {
+      "description": "Continuous generation of new phases without consolidation, causing exponential codebase growth and complexity",
+      "severity": "critical",
+      "detection_signals": [
+        "Phase numbers increasing beyond 50 without prior deduplication pass",
+        "New phase files added without first auditing existing functionality",
+        "Similar test names across multiple phase files (e.g., test_revenue_quality, test_revenue_resilience, test_revenue_analysis)",
+        "LLM token usage per phase > 17000 tokens consistently",
+        "No consolidation or refactoring commits between phases"
+      ],
+      "prevention_rules": [
+        "After every 5 phases, conduct a deduplication audit",
+        "Compare new phase functionality against existing phases using cosine similarity (threshold: 0.85)",
+        "Consolidate algebraically equivalent ratios into shared functions",
+        "Create explicit 'consolidation phase' commits between feature clusters",
+        "Track ratio coverage in ratio_registry.json before implementing new phase"
+      ],
+      "example_incident": "Phases 100-300 generated 200+ ratio calculation tests with high duplication"
+    },
+    "context_explosion": {
+      "description": "Single files grow beyond sustainable size (>15K LOC), making testing and maintenance difficult",
+      "severity": "high",
+      "detection_signals": [
+        "financial_analyzer.py or insights_page.py exceeds 15000 lines",
+        "Single file contains 50+ functions without clear separation",
+        "Test file imports grow to >20 function imports from single module",
+        "Function length exceeds 100 lines regularly"
+      ],
+      "prevention_rules": [
+        "Split modules when approaching 8000 LOC (before 15K threshold)",
+        "Use protocol-based dependency injection to avoid circular imports",
+        "Group related functions into separate modules: ratios/, scoring/, forecasting/, etc.",
+        "Maximum function length: 50 lines (refactor longer functions)",
+        "Create module-specific test files, not monolithic test suites"
+      ],
+      "example_incident": "financial_analyzer.py would exceed 8000 LOC with unbounded phase generation"
+    },
+    "orchestrator_drift": {
+      "description": "Orchestrator state (CONTINUITY.md) diverges from actual code and git history, causing coordination failures",
+      "severity": "critical",
+      "detection_signals": [
+        "CONTINUITY.md lists phases not in code",
+        "Code implements features not listed in CONTINUITY.md",
+        "Last recorded commit in CONTINUITY.md doesn't match latest git commit",
+        "Phase statuses marked complete but tests fail",
+        "More than 3 untracked files in git status (not in .gitignore)"
+      ],
+      "prevention_rules": [
+        "After every commit, update CONTINUITY.md with summary and commit hash",
+        "Run 'git log --oneline -3' and verify against CONTINUITY.md",
+        "Before starting new work, run full test suite and compare git status",
+        "Add validation check: (tests passing) AND (CONTINUITY.md matches code) before next phase",
+        "Use atomic commits per feature cluster"
+      ],
+      "example_incident": "CONTINUITY.md showed phases 1-6 but code contained 350+ test files"
+    },
+    "ratio_duplication": {
+      "description": "Algebraically equivalent ratios implemented multiple times with different names, causing cognitive load and maintenance burden",
+      "severity": "high",
+      "detection_signals": [
+        "Multiple ratios with same formula: e.g., debt_to_assets = 1 - equity_ratio",
+        "Ratio name variations: profit_margin vs net_margin vs net_profit_ratio",
+        "Test files for ratios that are linear combinations of existing ratios",
+        "Ratios with near-identical purpose but different inputs"
+      ],
+      "prevention_rules": [
+        "Before implementing new ratio, check ratio_registry.json for canonical form",
+        "Create deduplication gate: compare new ratio formula against registry (cosine similarity)",
+        "If similarity > 0.85, mark as 'derived_from' in registry instead of new ratio",
+        "Document first_introduced_phase for all ratios to track lineage",
+        "Create shared canonical_ratios.py with single implementation of each unique formula"
+      ],
+      "example_incident": "Phases 100-300 implemented dozens of profitability ratios that were algebraic combinations of profit_margin, ROA, ROE"
+    },
+    "missing_checkpoints": {
+      "description": "No commits for extended periods (5+ phases), making rollback and debugging impossible",
+      "severity": "high",
+      "detection_signals": [
+        "git log shows gaps of 5+ phases without commits",
+        "CONTINUITY.md has untracked phases",
+        "More than 10 untracked files in git status",
+        "Tests pass but commits are stale"
+      ],
+      "prevention_rules": [
+        "Commit after every phase or every 5 tests, whichever is sooner",
+        "Use atomic commits with clear message: 'Phase X: [description]'",
+        "Auto-commit trigger: if 5 test files added without commit, prompt commit",
+        "Update CONTINUITY.md in same commit as code changes",
+        "Track commit frequency in learning_log.json"
+      ],
+      "example_incident": "Phases 100-300 generated 200+ test files with no commits, making history unrecoverable"
+    }
+  },
+  "detection_checklist": {
+    "pre_phase_launch": [
+      "Run 'git status' - ensure no untracked files except tests",
+      "Run 'pytest' - verify all tests pass",
+      "Check CONTINUITY.md - verify matches last commit",
+      "Check ratio_registry.json - ensure new ratios not already defined",
+      "Estimate token cost - should be < 5000 tokens (target < 17000 baseline)"
+    ],
+    "post_phase_completion": [
+      "Update CONTINUITY.md with phase summary and commit hash",
+      "Commit code with message 'Phase X: [description]'",
+      "Log outcome in learning_log.json",
+      "Run dedup check if phase 5, 10, 15, 20, etc. (every 5 phases)",
+      "Check file size - if approaching 8000 LOC, plan module split"
+    ]
+  }
+}

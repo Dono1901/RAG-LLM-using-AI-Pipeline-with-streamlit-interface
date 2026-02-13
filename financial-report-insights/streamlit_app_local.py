@@ -24,7 +24,7 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 # Supported file extensions
-SUPPORTED_EXTENSIONS = [".pdf", ".txt", ".md", ".xlsx", ".xlsm", ".xls", ".csv", ".tsv"]
+SUPPORTED_EXTENSIONS = [".pdf", ".txt", ".md", ".xlsx", ".xlsm", ".xls", ".csv", ".tsv", ".docx"]
 MAX_FILE_SIZE = settings.max_file_size_mb * 1024 * 1024  # bytes
 
 
@@ -103,13 +103,14 @@ def render_sidebar():
         docs_path = Path("./documents")
         docs_path.mkdir(exist_ok=True)
 
-        doc_files = list(docs_path.glob("*"))
-        doc_files = [f for f in doc_files if f.suffix.lower() in SUPPORTED_EXTENSIONS]
+        doc_files = list(docs_path.rglob("*"))
+        doc_files = [f for f in doc_files if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS]
 
         # Group by type
         pdf_files = [f for f in doc_files if f.suffix.lower() == ".pdf"]
         text_files = [f for f in doc_files if f.suffix.lower() in [".txt", ".md"]]
         excel_files = [f for f in doc_files if f.suffix.lower() in [".xlsx", ".xlsm", ".xls", ".csv", ".tsv"]]
+        docx_files = [f for f in doc_files if f.suffix.lower() == ".docx"]
 
         if doc_files:
             st.success(f"{len(doc_files)} document(s) loaded")
@@ -117,15 +118,19 @@ def render_sidebar():
                 if pdf_files:
                     st.markdown("**PDF Files:**")
                     for f in pdf_files:
-                        st.caption(f"📄 {f.name}")
+                        st.caption(f"📄 {f.relative_to(docs_path)}")
                 if text_files:
                     st.markdown("**Text Files:**")
                     for f in text_files:
-                        st.caption(f"📝 {f.name}")
+                        st.caption(f"📝 {f.relative_to(docs_path)}")
                 if excel_files:
                     st.markdown("**Excel/CSV Files:**")
                     for f in excel_files:
-                        st.caption(f"📊 {f.name}")
+                        st.caption(f"📊 {f.relative_to(docs_path)}")
+                if docx_files:
+                    st.markdown("**Word Documents:**")
+                    for f in docx_files:
+                        st.caption(f"📝 {f.relative_to(docs_path)}")
         else:
             st.warning("No documents found")
             st.info("Add files to the 'documents' folder or use Document Manager")
@@ -145,7 +150,7 @@ def render_sidebar():
         3. Explore data in Financial Insights
 
         **Supported formats:**
-        - PDF, TXT, MD
+        - PDF, Word (docx), TXT, MD
         - Excel (xlsx, xlsm, xls)
         - CSV, TSV
         """)
@@ -317,9 +322,9 @@ def render_document_manager():
 
     uploaded_files = st.file_uploader(
         "Upload financial documents",
-        type=['pdf', 'xlsx', 'xlsm', 'xls', 'csv', 'txt', 'md', 'tsv'],
+        type=['pdf', 'xlsx', 'xlsm', 'xls', 'csv', 'txt', 'md', 'tsv', 'docx'],
         accept_multiple_files=True,
-        help="Supports PDF, Excel (xlsx, xlsm, xls), CSV, TSV, and text files"
+        help="Supports PDF, Word (docx), Excel (xlsx, xlsm, xls), CSV, TSV, and text files"
     )
 
     if uploaded_files:
@@ -336,17 +341,23 @@ def render_document_manager():
     # Current documents
     st.subheader("Current Documents")
 
-    doc_files = list(docs_path.glob("*"))
-    doc_files = [f for f in doc_files if f.suffix.lower() in SUPPORTED_EXTENSIONS]
+    doc_files = list(docs_path.rglob("*"))
+    doc_files = [f for f in doc_files if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS]
 
     if doc_files:
         # Create a table of documents
         for f in sorted(doc_files, key=lambda x: x.stat().st_mtime, reverse=True):
             col1, col2, col3 = st.columns([3, 1, 1])
+            rel_path = f.relative_to(docs_path)
 
             with col1:
-                icon = "📊" if f.suffix.lower() in ['.xlsx', '.xlsm', '.xls', '.csv', '.tsv'] else "📄"
-                st.markdown(f"{icon} **{f.name}**")
+                if f.suffix.lower() in ['.xlsx', '.xlsm', '.xls', '.csv', '.tsv']:
+                    icon = "📊"
+                elif f.suffix.lower() == ".docx":
+                    icon = "📝"
+                else:
+                    icon = "📄"
+                st.markdown(f"{icon} **{rel_path}**")
 
             with col2:
                 size_kb = f.stat().st_size / 1024
@@ -356,9 +367,9 @@ def render_document_manager():
                     st.caption(f"{size_kb:.1f} KB")
 
             with col3:
-                if st.button("🗑️", key=f"delete_{f.name}", help=f"Delete {f.name}"):
+                if st.button("🗑️", key=f"delete_{rel_path}", help=f"Delete {rel_path}"):
                     f.unlink()
-                    st.success(f"Deleted {f.name}")
+                    st.success(f"Deleted {rel_path}")
                     st.cache_resource.clear()
                     st.rerun()
 
