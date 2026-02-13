@@ -4,10 +4,8 @@ streamlit>=1.30.0,<2.0.0
 pydantic>=2.0.0,<3.0.0
 pydantic-settings>=2.0.0,<3.0.0
 
-# LLM & Embeddings
-ollama>=0.1.0,<1.0.0
-sentence-transformers>=2.2.0,<3.0.0
-torch>=2.1.0,<3.0.0
+# LLM & Embeddings (served by Docker Model Runner)
+ollama>=0.3.0,<1.0.0
 
 # Document Processing
 PyMuPDF>=1.23.0,<2.0.0

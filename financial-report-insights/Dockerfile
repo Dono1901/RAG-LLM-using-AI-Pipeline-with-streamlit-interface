@@ -18,9 +18,6 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# HuggingFace cache dir (must match volume mount and appuser home)
-ENV HF_HOME=/app/.cache/huggingface
-
 # Install tini for proper signal handling (graceful SIGTERM)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tini && \
@@ -38,7 +35,7 @@ COPY --from=builder /install /usr/local
 COPY *.py ./
 
 # Create directories with correct permissions
-RUN mkdir -p /app/documents /app/.cache/huggingface /app/.streamlit && \
+RUN mkdir -p /app/documents /app/.cache /app/.streamlit && \
     chown -R appuser:appuser /app
 
 # Create minimal Streamlit config
@@ -47,10 +44,6 @@ RUN printf '[server]\nheadless = true\nmaxUploadSize = 200\n' > /app/.streamlit/
 
 # Switch to non-root user
 USER appuser
-
-# Pre-cache sentence-transformers model at build time (~80MB)
-# Eliminates download on first container start; works offline at runtime
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Expose Streamlit port only
 EXPOSE 8501

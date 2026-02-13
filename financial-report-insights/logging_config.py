@@ -64,5 +64,5 @@ def setup_logging() -> None:
     root.addHandler(handler)
 
     # Suppress noisy third-party loggers
-    for noisy in ("urllib3", "sentence_transformers", "torch", "httpx"):
+    for noisy in ("urllib3", "httpx"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

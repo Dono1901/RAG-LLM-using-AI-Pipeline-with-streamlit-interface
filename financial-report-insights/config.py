@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_model: str = "llama3.2"
-    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model: str = "mxbai-embed-large"
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 2
 

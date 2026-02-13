@@ -356,18 +356,19 @@ class LocalLLM:
 
 
 class LocalEmbedder:
-    """Local embeddings using sentence-transformers."""
+    """Local embeddings via Ollama-compatible API (Docker Model Runner)."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "mxbai-embed-large"):
         """
-        Initialize the local embedder.
+        Initialize the embedder using an Ollama-served embedding model.
 
         Args:
-            model_name: HuggingFace model name for embeddings
+            model_name: Ollama model name for embeddings
         """
-        from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer(model_name)
-        self.dimension = self.model.get_sentence_embedding_dimension()
+        self.model_name = model_name
+        # Probe to detect embedding dimension
+        probe = ollama.embed(model=self.model_name, input=["dimension probe"])
+        self.dimension = len(probe["embeddings"][0])
 
     def embed(self, text: str) -> list:
         """
@@ -379,8 +380,8 @@ class LocalEmbedder:
         Returns:
             List of floats (embedding vector)
         """
-        embedding = self.model.encode(text, convert_to_numpy=True)
-        return embedding.tolist()
+        result = ollama.embed(model=self.model_name, input=[text])
+        return result["embeddings"][0]
 
     def embed_batch(self, texts: list) -> list:
         """
@@ -392,5 +393,5 @@ class LocalEmbedder:
         Returns:
             List of embedding vectors
         """
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
-        return embeddings.tolist()
+        result = ollama.embed(model=self.model_name, input=texts)
+        return result["embeddings"]
