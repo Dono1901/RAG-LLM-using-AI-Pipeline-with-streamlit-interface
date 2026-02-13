@@ -1,0 +1,178 @@
+"""Tests for the FastAPI API layer."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def mock_rag():
+    """Return a mock SimpleRAG wired into the api module."""
+    rag = MagicMock()
+    rag.documents = [
+        {"source": "test.pdf", "type": "pdf", "content": "Revenue was $1M."},
+        {"source": "data.xlsx", "type": "excel", "content": "Total assets $5M."},
+    ]
+    rag.retrieve.return_value = rag.documents[:1]
+    rag.answer.return_value = "The revenue is $1M."
+    rag.answer_stream.return_value = iter(["The ", "revenue ", "is ", "$1M."])
+    rag.llm = MagicMock()
+    rag.llm.circuit_state = "CLOSED"
+    rag.charlie_analyzer = MagicMock()
+    return rag
+
+
+@pytest.fixture()
+def client(mock_rag):
+    """TestClient with the RAG singleton patched."""
+    import api as api_module
+    api_module._rag_instance = mock_rag
+    from api import app
+    with TestClient(app) as c:
+        yield c
+    api_module._rag_instance = None
+
+
+# ---------------------------------------------------------------------------
+# /health
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEndpoint:
+    def test_health_ok(self, client):
+        with patch("api.get_health_status", return_value={"healthy": True, "status": "healthy", "checks": []}):
+            resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["healthy"] is True
+
+    def test_health_unhealthy(self, client):
+        with patch("api.get_health_status", return_value={"healthy": False, "status": "unhealthy", "checks": []}):
+            resp = client.get("/health")
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /query
+# ---------------------------------------------------------------------------
+
+
+class TestQueryEndpoint:
+    def test_query_success(self, client, mock_rag):
+        resp = client.post("/query", json={"text": "What is revenue?"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["answer"] == "The revenue is $1M."
+        assert "test.pdf" in body["sources"]
+        assert body["document_count"] == 1
+
+    def test_query_custom_top_k(self, client, mock_rag):
+        resp = client.post("/query", json={"text": "What is revenue?", "top_k": 5})
+        assert resp.status_code == 200
+        mock_rag.retrieve.assert_called_with("What is revenue?", top_k=5)
+
+    def test_query_empty_text_rejected(self, client):
+        resp = client.post("/query", json={"text": ""})
+        assert resp.status_code == 422
+
+    def test_query_circuit_open(self, client, mock_rag):
+        mock_rag.llm.circuit_state = "OPEN"
+        resp = client.post("/query", json={"text": "Anything"})
+        assert resp.status_code == 503
+        assert "circuit breaker" in resp.json()["detail"].lower()
+
+    def test_query_llm_connection_error(self, client, mock_rag):
+        from local_llm import LLMConnectionError
+        mock_rag.answer.side_effect = LLMConnectionError("down")
+        resp = client.post("/query", json={"text": "Test"})
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /query-stream
+# ---------------------------------------------------------------------------
+
+
+class TestQueryStreamEndpoint:
+    def test_stream_success(self, client, mock_rag):
+        resp = client.post("/query-stream", json={"text": "What is revenue?"})
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        body = resp.text
+        assert "revenue" in body
+
+    def test_stream_circuit_open(self, client, mock_rag):
+        mock_rag.llm.circuit_state = "OPEN"
+        resp = client.post("/query-stream", json={"text": "Anything"})
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /analyze
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeEndpoint:
+    def test_analyze_success(self, client, mock_rag):
+        mock_report = MagicMock()
+        mock_report.executive_summary = "Company looks healthy."
+        mock_report.sections = {"ratio_analysis": "Good ratios."}
+        mock_report.generated_at = "2026-01-01"
+        mock_rag.charlie_analyzer.generate_report.return_value = mock_report
+
+        resp = client.post("/analyze", json={
+            "financial_data": {"revenue": 1000000, "net_income": 200000}
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executive_summary"] == "Company looks healthy."
+        assert "ratio_analysis" in body["sections"]
+
+    def test_analyze_no_analyzer(self, client, mock_rag):
+        mock_rag.charlie_analyzer = None
+        resp = client.post("/analyze", json={"financial_data": {"revenue": 100}})
+        assert resp.status_code == 501
+
+    def test_analyze_ignores_unknown_fields(self, client, mock_rag):
+        """Unknown fields in financial_data should be silently ignored."""
+        mock_report = MagicMock()
+        mock_report.executive_summary = "OK"
+        mock_report.sections = {}
+        mock_report.generated_at = ""
+        mock_rag.charlie_analyzer.generate_report.return_value = mock_report
+
+        resp = client.post("/analyze", json={
+            "financial_data": {"revenue": 500, "unknown_field_xyz": 99}
+        })
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /documents
+# ---------------------------------------------------------------------------
+
+
+class TestDocumentsEndpoint:
+    def test_documents_list(self, client, mock_rag):
+        resp = client.get("/documents")
+        assert resp.status_code == 200
+        docs = resp.json()
+        assert len(docs) == 2
+        assert docs[0]["source"] == "test.pdf"
+        assert docs[1]["source"] == "data.xlsx"
+
+    def test_documents_deduplication(self, client, mock_rag):
+        """Duplicate sources should be collapsed."""
+        mock_rag.documents = [
+            {"source": "a.pdf", "type": "pdf", "content": "chunk 1"},
+            {"source": "a.pdf", "type": "pdf", "content": "chunk 2"},
+            {"source": "b.pdf", "type": "pdf", "content": "chunk 3"},
+        ]
+        resp = client.get("/documents")
+        docs = resp.json()
+        assert len(docs) == 2

@@ -1,0 +1,111 @@
+#!/bin/bash
+# =============================================================================
+# PRE-COMMIT HOOK: Automatic Checkpoint Workflow
+# =============================================================================
+# Enforces guardrails from .loki/ learning infrastructure automatically.
+# Runs on every commit - no manual invocation needed.
+# =============================================================================
+
+set -e
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+echo -e "${CYAN}[checkpoint] Running pre-commit guardrails...${NC}"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+ANALYZER="$REPO_ROOT/financial-report-insights/financial_analyzer.py"
+INSIGHTS="$REPO_ROOT/financial-report-insights/insights_page.py"
+REGISTRY="$REPO_ROOT/.loki/memory/semantic/ratio_registry.json"
+FAILED=0
+
+# ── 1. File size guardrail (max 15,000 LOC warning, block at 20,000) ──
+check_file_size() {
+    local file="$1"
+    local name="$2"
+    local max_warn=15000
+    local max_block=20000
+
+    if [ -f "$file" ]; then
+        local loc
+        loc=$(wc -l < "$file" | tr -d ' ')
+        if [ "$loc" -gt "$max_block" ]; then
+            echo -e "${RED}[BLOCKED] $name is $loc LOC (max: $max_block). Split before committing.${NC}"
+            FAILED=1
+        elif [ "$loc" -gt "$max_warn" ]; then
+            echo -e "${YELLOW}[WARNING] $name is $loc LOC (target: <$max_warn). Plan a split.${NC}"
+        else
+            echo -e "${GREEN}[OK] $name: $loc LOC${NC}"
+        fi
+    fi
+}
+
+check_file_size "$ANALYZER" "financial_analyzer.py"
+check_file_size "$INSIGHTS" "insights_page.py"
+
+# ── 2. Test suite must pass ──
+echo -e "${CYAN}[checkpoint] Running tests...${NC}"
+PYTHON_PATH="$REPO_ROOT/financial-report-insights"
+PYTHON_EXE=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo "/c/Users/dtmcg/AppData/Local/Microsoft/WindowsApps/python3.13.exe")
+
+if [ -f "$PYTHON_EXE" ] || command -v "$PYTHON_EXE" &>/dev/null; then
+    pushd "$REPO_ROOT/financial-report-insights" > /dev/null
+    TEST_OUTPUT=$("$PYTHON_EXE" -m pytest tests/ -q --tb=line 2>&1) || true
+    popd > /dev/null
+
+    if echo "$TEST_OUTPUT" | grep -q "failed"; then
+        FAIL_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+')
+        PASS_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+')
+        echo -e "${RED}[BLOCKED] Tests: $FAIL_COUNT failed, $PASS_COUNT passed${NC}"
+        echo "$TEST_OUTPUT" | grep "FAILED" | head -5
+        FAILED=1
+    else
+        PASS_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+')
+        echo -e "${GREEN}[OK] Tests: $PASS_COUNT passed${NC}"
+    fi
+else
+    echo -e "${YELLOW}[SKIP] Python not found - skipping test check${NC}"
+fi
+
+# ── 3. Check for new ratio methods without registry entry ──
+if git diff --cached --name-only | grep -q "financial_analyzer.py"; then
+    NEW_METHODS=$(git diff --cached "$ANALYZER" | grep "^+" | grep -oP 'def (calculate_\w+|analyze_\w+)' | sed 's/def //' || true)
+    if [ -n "$NEW_METHODS" ] && [ -f "$REGISTRY" ]; then
+        echo -e "${CYAN}[checkpoint] Checking new methods against ratio registry...${NC}"
+        UNREGISTERED=""
+        while IFS= read -r method; do
+            if ! grep -q "$method" "$REGISTRY" 2>/dev/null; then
+                UNREGISTERED="$UNREGISTERED $method"
+            fi
+        done <<< "$NEW_METHODS"
+        if [ -n "$UNREGISTERED" ]; then
+            echo -e "${YELLOW}[WARNING] New methods not in ratio_registry.json:${NC}"
+            echo -e "${YELLOW}  $UNREGISTERED${NC}"
+            echo -e "${YELLOW}  Add them to .loki/memory/semantic/ratio_registry.json or verify they aren't duplicates.${NC}"
+        else
+            echo -e "${GREEN}[OK] All new methods registered${NC}"
+        fi
+    fi
+fi
+
+# ── 4. CONTINUITY.md and orchestrator.json should be staged together ──
+STAGED=$(git diff --cached --name-only)
+HAS_CONTINUITY=$(echo "$STAGED" | grep -c "CONTINUITY.md" || true)
+HAS_ORCHESTRATOR=$(echo "$STAGED" | grep -c "orchestrator.json" || true)
+if [ "$HAS_CONTINUITY" -eq 1 ] && [ "$HAS_ORCHESTRATOR" -eq 0 ]; then
+    echo -e "${YELLOW}[WARNING] CONTINUITY.md staged without orchestrator.json - consider syncing both${NC}"
+elif [ "$HAS_ORCHESTRATOR" -eq 1 ] && [ "$HAS_CONTINUITY" -eq 0 ]; then
+    echo -e "${YELLOW}[WARNING] orchestrator.json staged without CONTINUITY.md - consider syncing both${NC}"
+fi
+
+# ── 5. Block if critical guardrails failed ──
+if [ "$FAILED" -eq 1 ]; then
+    echo -e "${RED}[BLOCKED] Commit blocked by guardrails. Fix issues above and retry.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}[checkpoint] All pre-commit checks passed.${NC}"
+exit 0

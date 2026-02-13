@@ -1,0 +1,48 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+
+# Tests (not needed in production image)
+tests/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Secrets
+.env
+credentials.json
+service_account.json
+*.pem
+*.key
+
+# Caches
+.cache/
+
+# Documents (mounted as volume)
+documents/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Project tooling (not needed in image)
+.claude/
+.loki/
+.swarm/
+scripts/
+*.bak
+.streamlit/
+
+# Misc
+*.md
+*.pdf
+generate_readme_pdf.py

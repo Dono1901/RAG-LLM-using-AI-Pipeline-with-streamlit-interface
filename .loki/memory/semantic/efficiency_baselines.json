@@ -1,0 +1,143 @@
+{
+  "baselines": {
+    "tokens_per_phase": {
+      "value": 17000,
+      "unit": "tokens",
+      "source": "agent-orchestration-improve-agent skill analysis",
+      "description": "Estimated average token cost per phase generation",
+      "notes": "Baseline from Phase 1-6 experience; consolidation phases use 3000-5000 tokens"
+    },
+    "target_tokens_per_phase": {
+      "value": 5000,
+      "unit": "tokens",
+      "description": "Target token cost after deduplication and consolidation",
+      "achievable_through": [
+        "Consolidating algebraically equivalent ratios",
+        "Using shared computation functions instead of phase-specific implementations",
+        "Leveraging ratio_registry.json to skip redundant development",
+        "Modular architecture preventing context re-explanation"
+      ]
+    },
+    "max_phases_before_review": {
+      "value": 5,
+      "unit": "phases",
+      "description": "Maximum phases to generate before conducting deduplication audit",
+      "trigger": "After completing phase 5, 10, 15, 20, etc., run dedup scan",
+      "checklist": [
+        "Compare new phases against existing using cosine similarity",
+        "Consolidate equivalent ratios",
+        "Refactor redundant test logic",
+        "Update ratio_registry.json"
+      ]
+    },
+    "max_file_loc": {
+      "value": 15000,
+      "unit": "lines of code",
+      "description": "Maximum lines of code in a single file before splitting required",
+      "split_threshold": 8000,
+      "notes": "Plan module split at 8000 LOC to stay well below 15K limit",
+      "example_split": "financial_analyzer.py -> ratios/, scoring/, forecasting/, retrieval/"
+    },
+    "test_coverage_target": {
+      "value": 80,
+      "unit": "percent",
+      "description": "Minimum test coverage for critical paths",
+      "measurement": "pytest --cov=financial_report_insights --cov-report=term-report",
+      "critical_paths": [
+        "financial_analyzer.py (all ratio calculations)",
+        "config.py (settings validation)",
+        "protocols.py (interface contracts)",
+        "insights_page.py (UI logic)",
+        "healthcheck.py (health checks)"
+      ]
+    },
+    "dedup_threshold": {
+      "value": 0.85,
+      "unit": "cosine similarity",
+      "description": "Similarity threshold above which ratios are considered duplicates",
+      "usage": "Before implementing new ratio, compute similarity against registry",
+      "action_if_exceeded": "Mark as derived_from existing ratio; consolidate implementations"
+    },
+    "commit_frequency": {
+      "value": "every 5 phases",
+      "description": "Minimum commit frequency to maintain code history",
+      "rationale": "Prevents unbounded drift; enables rollback; keeps CONTINUITY.md in sync",
+      "atomic_commit_template": "Phase X-Y: [cluster description]\\n\\nFeatures:\\n- [feature 1]\\n- [feature 2]\\n\\nTests: [count] new tests passing"
+    }
+  },
+  "efficiency_gates": {
+    "pre_phase_gate": {
+      "name": "Pre-Phase Readiness Check",
+      "checks": [
+        {
+          "name": "Code health",
+          "criteria": "No file > 8000 LOC; test_coverage >= 80%",
+          "action": "If failed, refactor before next phase"
+        },
+        {
+          "name": "Git synchronization",
+          "criteria": "CONTINUITY.md matches latest commit; no untracked files (except tests)",
+          "action": "If failed, commit and update CONTINUITY.md"
+        },
+        {
+          "name": "Ratio uniqueness",
+          "criteria": "New ratios not in ratio_registry.json with similarity > 0.85",
+          "action": "If failed, consolidate with existing ratios"
+        },
+        {
+          "name": "Token budget",
+          "criteria": "Estimated tokens <= 5000 (consolidated), <= 17000 (new exploration)",
+          "action": "If exceeded, narrow scope or consolidate first"
+        }
+      ]
+    },
+    "post_phase_gate": {
+      "name": "Post-Phase Validation",
+      "checks": [
+        {
+          "name": "Test passing",
+          "criteria": "All pytest tests pass",
+          "action": "If failed, debug before proceeding"
+        },
+        {
+          "name": "CONTINUITY sync",
+          "criteria": "CONTINUITY.md updated with phase summary and commit hash",
+          "action": "If not updated, do so before next phase"
+        },
+        {
+          "name": "Learning log entry",
+          "criteria": "Session entry added to learning_log.json",
+          "action": "If not logged, add entry for audit trail"
+        }
+      ]
+    },
+    "review_gate": {
+      "name": "Deduplication Review (every 5 phases)",
+      "trigger": "After completing phases 5, 10, 15, 20, etc.",
+      "steps": [
+        "Compare all ratio formulas in ratio_registry.json for algebraic equivalence",
+        "Scan test files for duplicate test logic",
+        "Identify and consolidate equivalent implementations",
+        "Update ratio_registry.json with deduplication results",
+        "Commit consolidation changes with message 'Consolidation: Phase X dedup pass'"
+      ]
+    }
+  },
+  "token_tracking": {
+    "description": "Track token usage to catch runaway generation",
+    "fields": {
+      "phase": "Phase identifier (e.g., 'Phase_7')",
+      "tokens_estimated": "Estimated tokens for phase",
+      "tokens_actual": "Actual tokens used (from LLM logs)",
+      "ratio_count": "Number of new ratios in phase",
+      "test_count": "Number of new tests in phase",
+      "duplications_detected": "Number of duplicate implementations found"
+    },
+    "alert_thresholds": {
+      "tokens_exceeds_17000": "Yellow flag - investigate consolidation opportunities",
+      "tokens_exceeds_25000": "Red flag - phase is too large; split or consolidate",
+      "ratio_count_exceeds_10": "Review for duplication",
+      "duplications_detected_gt_0": "Must consolidate before next phase"
+    }
+  }
+}
