@@ -29,6 +29,165 @@ class FinancialInsightsPage:
     - Natural language query integration
     """
 
+    # (label, method_name, needs_workbook)
+    CATEGORY_TABS = {
+        "Executive & Overview": [
+            ("Executive Summary", "_render_executive_summary", True),
+            ("Financial Ratios", "_render_ratios_dashboard", False),
+            ("Health Score", "_render_health_score", False),
+            ("Financial Health", "_render_financial_health_score", False),
+            ("Credit Rating", "_render_credit_rating", False),
+            ("AI Narrative", "_render_narrative", False),
+            ("Custom KPIs", "_render_custom_kpis", False),
+            ("Industry Benchmark", "_render_industry_benchmark", False),
+        ],
+        "Profitability": [
+            ("Gross Margin", "_render_gross_margin_stability", False),
+            ("EBITDA Quality", "_render_ebitda_margin_quality", False),
+            ("Net Profit Margin", "_render_net_profit_margin", False),
+            ("Operating Margin", "_render_operating_margin", False),
+            ("Earnings Quality", "_render_earnings_quality", False),
+            ("Income Quality", "_render_income_quality", False),
+            ("Op Income Quality", "_render_operating_income_quality", False),
+            ("Income Stability", "_render_income_stability", False),
+            ("Income Resilience", "_render_income_resilience", False),
+            ("Income Retention", "_render_income_retention", False),
+            ("Profitability Decomp", "_render_profitability_decomp", False),
+            ("Profitability Depth", "_render_profitability_depth", False),
+            ("Profit Retention", "_render_profit_retention", False),
+            ("Profit Sustainability", "_render_profit_sustainability", False),
+            ("Profit Conversion", "_render_profit_conversion", False),
+        ],
+        "Returns & Efficiency": [
+            ("ROE Analysis", "_render_roe_analysis", False),
+            ("ROA Quality", "_render_roa_quality", False),
+            ("ROIC Analysis", "_render_roic_analysis", False),
+            ("Asset Efficiency", "_render_asset_efficiency", False),
+            ("Revenue Efficiency", "_render_revenue_efficiency", False),
+            ("Tax Efficiency", "_render_tax_efficiency", False),
+            ("Fixed Asset Eff", "_render_fixed_asset_efficiency", False),
+            ("Operational Eff", "_render_operational_efficiency", False),
+            ("Capital Efficiency", "_render_capital_efficiency", False),
+            ("Risk-Adjusted", "_render_risk_adjusted", False),
+            ("Asset Deployment", "_render_asset_deployment_efficiency", False),
+            ("Financial Prod", "_render_financial_productivity", False),
+            ("Resource Optim", "_render_resource_optimization", False),
+            ("Revenue Quality", "_render_revenue_quality_index", False),
+        ],
+        "Cash Flow & Liquidity": [
+            ("Cash Flow", "_render_cashflow_dashboard", False),
+            ("CF Quality", "_render_cash_flow_quality", False),
+            ("CF Forecast", "_render_cashflow_forecast", False),
+            ("Cash Conversion", "_render_cash_conversion", False),
+            ("Cash Conv Eff", "_render_cash_conversion_efficiency", False),
+            ("Cash Burn", "_render_cash_burn", False),
+            ("Defensive Interval", "_render_defensive_interval", False),
+            ("Defensive Posture", "_render_defensive_posture", False),
+            ("CF Stability", "_render_cash_flow_stability", False),
+            ("Liquidity Stress", "_render_liquidity_stress", False),
+            ("Operating CF Ratio", "_render_operating_cash_flow_ratio", False),
+            ("Revenue Cash Real", "_render_revenue_cash_realization", False),
+        ],
+        "Leverage & Debt": [
+            ("DuPont Analysis", "_render_dupont_analysis", False),
+            ("Operating Leverage", "_render_operating_leverage", False),
+            ("Op Leverage Depth", "_render_operational_leverage_depth", False),
+            ("Fixed Cost Leverage", "_render_fixed_cost_leverage_ratio", False),
+            ("Debt Composition", "_render_debt_composition", False),
+            ("Debt Quality", "_render_debt_quality", False),
+            ("Debt Svc Coverage", "_render_debt_service_coverage", False),
+            ("Debt to Capital", "_render_debt_to_capital", False),
+            ("Debt to Equity", "_render_debt_to_equity", False),
+            ("Debt Discipline", "_render_debt_discipline", False),
+            ("Debt Management", "_render_debt_management", False),
+            ("Debt Burden Index", "_render_debt_burden_index", False),
+            ("Interest Coverage", "_render_interest_coverage", False),
+        ],
+        "Working Capital & Turnover": [
+            ("Working Capital", "_render_working_capital", False),
+            ("Receivables Mgmt", "_render_receivables_management", False),
+            ("Receivables Turn", "_render_receivables_turnover", False),
+            ("Payables Turnover", "_render_payables_turnover", False),
+            ("Inventory Turnover", "_render_inventory_turnover", False),
+            ("Cash Cycle", "_render_cash_conversion_cycle", False),
+            ("Inventory Holding", "_render_inventory_holding_cost", False),
+            ("Inventory Coverage", "_render_inventory_coverage", False),
+            ("Liability Coverage", "_render_liability_coverage_strength", False),
+            ("Liability Mgmt", "_render_liability_management", False),
+        ],
+        "Valuation & Growth": [
+            ("Valuation Indicators", "_render_valuation_indicators", False),
+            ("Sustainable Growth", "_render_sustainable_growth", False),
+            ("Internal Growth Rate", "_render_internal_growth_rate", False),
+            ("Internal Growth Cap", "_render_internal_growth_capacity", False),
+            ("FCF Yield", "_render_fcf_yield", False),
+            ("Net Worth Growth", "_render_net_worth_growth", False),
+            ("Valuation Signal", "_render_valuation_signal", False),
+            ("Revenue Growth", "_render_revenue_growth", False),
+            ("Equity Reinvest", "_render_equity_reinvestment", False),
+            ("Revenue Predict", "_render_revenue_predictability", False),
+            ("Margin of Safety", "_render_margin_of_safety", False),
+        ],
+        "Scoring Models & Risk": [
+            ("Scoring Models", "_render_scoring_models", False),
+            ("Altman Z-Score", "_render_altman_z_score", False),
+            ("Piotroski F-Score", "_render_piotroski_f_score", False),
+            ("Beneish M-Score", "_render_beneish_m_score", False),
+            ("Concentration Risk", "_render_concentration_risk", False),
+            ("Operational Risk", "_render_operational_risk", False),
+            ("Covenant Monitor", "_render_covenant_monitor", False),
+            ("Financial Resilience", "_render_financial_resilience", False),
+            ("Structural Strength", "_render_structural_strength", False),
+        ],
+        "Capital Structure": [
+            ("Capital Allocation", "_render_capital_allocation", False),
+            ("Capital Adequacy", "_render_capital_adequacy", False),
+            ("Capital Discipline", "_render_capital_discipline", False),
+            ("Capital Preserv", "_render_capital_preservation", False),
+            ("Solvency Depth", "_render_solvency_depth", False),
+            ("Financial Flex", "_render_financial_flexibility", False),
+            ("Equity Multiplier", "_render_equity_multiplier", False),
+            ("Equity Preserv", "_render_equity_preservation", False),
+            ("Asset Quality", "_render_asset_quality", False),
+            ("Noncurrent Assets", "_render_noncurrent_asset_ratio", False),
+            ("Net Debt Position", "_render_net_debt_position", False),
+            ("Earnings to Debt", "_render_earnings_to_debt", False),
+            ("Profit Ret Power", "_render_profit_retention_power", False),
+            ("Cost Control", "_render_cost_control", False),
+        ],
+        "Trends & Comparison": [
+            ("Trends Dashboard", "_render_trends_dashboard", True),
+            ("Trend Forecast", "_render_trend_forecast", False),
+            ("Period Comparison", "_render_period_comparison", True),
+            ("Peer Comparison", "_render_peer_comparison", False),
+            ("Budget Analysis", "_render_budget_dashboard", True),
+            ("Variance Waterfall", "_render_variance_waterfall", True),
+        ],
+        "Simulation & Scenarios": [
+            ("What-If Analysis", "_render_what_if_analysis", False),
+            ("Monte Carlo", "_render_monte_carlo", False),
+            ("Driver Analysis", "_render_driver_analysis", False),
+            ("Ratio Decomposition", "_render_ratio_decomposition", False),
+        ],
+        "Advanced Metrics": [
+            ("WACC Analysis", "_render_wacc_analysis", False),
+            ("EVA Analysis", "_render_eva_analysis", False),
+            ("Depreciation Burden", "_render_depreciation_burden", False),
+            ("CapEx to Revenue", "_render_capex_to_revenue", False),
+            ("OpEx Ratio", "_render_operating_expense_ratio", False),
+            ("Expense Discipline", "_render_expense_ratio_discipline", False),
+            ("Funding Mix", "_render_funding_mix_balance", False),
+            ("Funding Efficiency", "_render_funding_efficiency", False),
+            ("Obligation Coverage", "_render_obligation_coverage", False),
+            ("Payout Discipline", "_render_payout_discipline", False),
+            ("Payout Resilience", "_render_payout_resilience", False),
+            ("Dividend Payout", "_render_dividend_payout", False),
+            ("CF to Debt", "_render_cash_flow_to_debt", False),
+            ("Asset Lightness", "_render_asset_lightness", False),
+            ("Operating Momentum", "_render_operating_momentum", False),
+        ],
+    }
+
     def __init__(self, docs_folder: str = "./documents"):
         """Initialize the insights page."""
         self.docs_folder = Path(docs_folder)
@@ -72,466 +231,25 @@ class FinancialInsightsPage:
                     st.session_state['current_workbook'] = workbook
                     st.session_state['analysis_results'] = self.analyzer.analyze(df)
 
-                    # Main content tabs
-                    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23, tab24, tab25, tab26, tab27, tab28, tab29, tab30, tab31, tab32, tab33, tab34, tab35, tab36, tab37, tab38, tab39, tab40, tab41, tab42, tab43, tab44, tab45, tab46, tab47, tab48, tab49, tab50, tab51, tab52, tab53, tab54, tab55, tab56, tab57, tab58, tab59, tab60, tab61, tab62, tab63, tab64, tab65, tab66, tab67, tab68, tab69, tab70, tab71, tab72, tab73, tab74, tab75, tab76, tab77, tab78, tab79, tab80, tab81, tab82, tab83, tab84, tab85, tab86, tab87, tab88, tab89, tab90, tab91, tab92, tab93, tab94, tab95, tab96, tab97, tab98, tab99, tab100, tab101, tab102, tab103, tab104, tab105, tab106, tab107, tab108, tab109, tab110, tab111, tab112, tab113, tab114, tab115, tab116, tab117, tab118, tab119, tab120, tab121, tab122, tab123, tab124, tab125, tab126, tab127, tab128, tab129, tab130, tab131, tab132 = st.tabs([
-                        "Executive Summary",
-                        "Financial Ratios",
-                        "Trends & Forecasts",
-                        "Budget Analysis",
-                        "Cash Flow",
-                        "Scoring Models",
-                        "What-If Analysis",
-                        "Period Comparison",
-                        "Monte Carlo",
-                        "Cash Flow Forecast",
-                        "Driver Analysis",
-                        "Covenant Monitor",
-                        "Working Capital",
-                        "AI Narrative",
-                        "Trend Forecast",
-                        "Industry Benchmark",
-                        "Custom KPIs",
-                        "Peer Comparison",
-                        "Ratio Decomposition",
-                        "Credit Rating",
-                        "Variance Waterfall",
-                        "Earnings Quality",
-                        "Capital Efficiency",
-                        "Liquidity Stress",
-                        "Health Score",
-                        "Operating Leverage",
-                        "Cash Flow Quality",
-                        "Asset Efficiency",
-                        "Profitability Decomp",
-                        "Risk-Adjusted Returns",
-                        "Valuation Indicators",
-                        "Sustainable Growth",
-                        "Concentration Risk",
-                        "Margin of Safety",
-                        "Earnings Quality",
-                        "Financial Flexibility",
-                        "DuPont Analysis",
-                        "Altman Z-Score",
-                        "Piotroski F-Score",
-                        "Interest Coverage",
-                        "WACC Analysis",
-                        "EVA Analysis",
-                        "FCF Yield",
-                        "Operating Leverage",
-                        "Cash Conversion",
-                        "Beneish M-Score",
-                        "Gross Margin",
-                        "EBITDA Quality",
-                        "Net Profit Margin",
-                        "ROE Analysis",
-                        "ROA Quality",
-                        "ROIC Analysis",
-                        "Tax Efficiency",
-                        "Capital Allocation",
-                        "Debt Svc Coverage",
-                        "Profit Retention",
-                        "Cash Burn",
-                        "Defensive Interval",
-                        "Equity Multiplier",
-                        "Financial Resilience",
-                        "Asset Quality",
-                        "Financial Health Score",
-                        "Operational Risk",
-                        "Debt Composition",
-                        "Revenue Efficiency",
-                        "Profitability Depth",
-                        "Op Leverage Depth",
-                        "Solvency Depth",
-                        "Receivables Mgmt",
-                        "DuPont Analysis",
-                        "Income Quality",
-                        "Cash Flow Stability",
-                        "Funding Efficiency",
-                        "Defensive Posture",
-                        "Income Stability",
-                        "FA Efficiency",
-                        "Equity Reinvest",
-                        "Rev Predict",
-                        "Liab Mgmt",
-                        "Equity Compound",
-                        "Fin Stamina",
-                        "Value Gen",
-                        "Op Fortitude",
-                        "Earn Integrity",
-                        "CF Resil",
-                        "Liq Endure",
-                        "Invest Disc",
-                        "Equity Prod",
-                        "Op Vigor",
-                        "Cash Prod",
-                        "Lev Sustain",
-                        "Val Accum",
-                        "Fin Prod",
-                        "Struct Sound",
-                        "Earn Stabil",
-                        "Res Optim",
-                        "Op Leverage",
-                        "Eq Mult Eff",
-                        "Rev Quality",
-                        "Margin Stab",
-                        "OpEx Effic",
-                        "Cap Intens",
-                        "Equity Mult",
-                        "FA Turnover",
-                        "Pay Turnover",
-                        "Cash Cycle",
-                        "Op Leverage",
-                        "Fin Leverage",
-                        "AP Eff",
-                        "Eq Growth",
-                        "EBITDA/Debt",
-                        "GP Effic",
-                        "Liab Cov",
-                        "Net Debt Pos",
-                        "Earn Conv",
-                        "Div Cov Str",
-                        "Net Wth Prs",
-                        "Eq Cush Str",
-                        "CF Suffcy",
-                        "Inv Cover",
-                        "Cash Rsrv",
-                        "Depr Cov",
-                        "Op Lever",
-                        "NI Effic",
-                        "FC Adeq",
-                        "Ast Light",
-                        "Fin Flex",
-                        "Cash Earn",
-                        "Prf Qual",
-                        "Liq Buff",
-                        "D/E Rat",
-                        "Fxd Chrg",
-                    ])
+                    # Category-based navigation (replaces 132 flat tabs)
+                    categories = list(self.CATEGORY_TABS.keys())
+                    selected_cat = st.selectbox(
+                        "Analysis Category", categories, index=0,
+                        key="insights_category"
+                    )
 
+                    # Sub-tabs for selected category
+                    entries = self.CATEGORY_TABS[selected_cat]
+                    sub_tabs = st.tabs([e[0] for e in entries])
+                    for tab, (label, method, needs_wb) in zip(sub_tabs, entries):
+                        with tab:
+                            if needs_wb:
+                                getattr(self, method)(df, workbook)
+                            else:
+                                getattr(self, method)(df)
 
-                    with tab1:
-                        self._render_executive_summary(df, workbook)
-                    with tab2:
-                        self._render_ratios_dashboard(df)
-                    with tab3:
-                        self._render_trends_dashboard(df, workbook)
-                    with tab4:
-                        self._render_budget_dashboard(df, workbook)
-                    with tab5:
-                        self._render_cashflow_dashboard(df)
-                    with tab6:
-                        self._render_scoring_models(df)
-                    with tab7:
-                        self._render_what_if_analysis(df)
-                    with tab8:
-                        self._render_period_comparison(df, workbook)
-                    with tab9:
-                        self._render_monte_carlo(df)
-                    with tab10:
-                        self._render_cashflow_forecast(df)
-                    with tab11:
-                        self._render_driver_analysis(df)
-                    with tab12:
-                        self._render_covenant_monitor(df)
-                    with tab13:
-                        self._render_working_capital(df)
-                    with tab14:
-                        self._render_narrative(df)
-                    with tab15:
-                        self._render_trend_forecast(df)
-                    with tab16:
-                        self._render_industry_benchmark(df)
-                    with tab17:
-                        self._render_custom_kpis(df)
-                    with tab18:
-                        self._render_peer_comparison(df)
-                    with tab19:
-                        self._render_ratio_decomposition(df)
-                    with tab20:
-                        self._render_credit_rating(df)
-                    with tab21:
-                        self._render_variance_waterfall(df, workbook)
-
-                    with tab22:
-                        self._render_earnings_quality(df)
-
-                    with tab23:
-                        self._render_capital_efficiency(df)
-
-                    with tab24:
-                        self._render_liquidity_stress(df)
-
-                    with tab25:
-                        self._render_health_score(df)
-
-                    with tab26:
-                        self._render_operating_leverage(df)
-
-                    with tab27:
-                        self._render_cash_flow_quality(df)
-                    with tab28:
-                        self._render_asset_efficiency(df)
-                    with tab29:
-                        self._render_profitability_decomp(df)
-                    with tab30:
-                        self._render_risk_adjusted(df)
-                    with tab31:
-                        self._render_valuation_indicators(df)
-                    with tab32:
-                        self._render_sustainable_growth(df)
-                    with tab33:
-                        self._render_concentration_risk(df)
-                    with tab34:
-                        self._render_margin_of_safety(df)
-                    with tab35:
-                        self._render_earnings_quality(df)
-                    with tab36:
-                        self._render_financial_flexibility(df)
-                    with tab37:
-                        self._render_dupont_analysis(df)
-                    with tab38:
-                        self._render_altman_z_score(df)
-                    with tab39:
-                        self._render_piotroski_f_score(df)
-                    with tab40:
-                        self._render_interest_coverage(df)
-                    with tab41:
-                        self._render_wacc_analysis(df)
-                    with tab42:
-                        self._render_eva_analysis(df)
-                    with tab43:
-                        self._render_fcf_yield(df)
-                    with tab44:
-                        self._render_operating_leverage(df)
-                    with tab45:
-                        self._render_cash_conversion(df)
-                    with tab46:
-                        self._render_beneish_m_score(df)
-                    with tab47:
-                        self._render_gross_margin_stability(df)
-                    with tab48:
-                        self._render_ebitda_margin_quality(df)
-                    with tab49:
-                        self._render_net_profit_margin(df)
-                    with tab50:
-                        self._render_roe_analysis(df)
-                    with tab51:
-                        self._render_roa_quality(df)
-                    with tab52:
-                        self._render_roic_analysis(df)
-                    with tab53:
-                        self._render_tax_efficiency(df)
-                    with tab54:
-                        self._render_capital_allocation(df)
-                    with tab55:
-                        self._render_debt_service_coverage(df)
-                    with tab56:
-                        self._render_profit_retention(df)
-                    with tab57:
-                        self._render_cash_burn(df)
-                    with tab58:
-                        self._render_defensive_interval(df)
-                    with tab59:
-                        self._render_equity_multiplier(df)
-                    with tab60:
-                        self._render_financial_resilience(df)
-                    with tab61:
-                        self._render_asset_quality(df)
-                    with tab62:
-                        self._render_financial_health_score(df)
-                    with tab63:
-                        self._render_operational_risk(df)
-                    with tab64:
-                        self._render_debt_composition(df)
-                    with tab65:
-                        self._render_revenue_efficiency(df)
-                    with tab66:
-                        self._render_profitability_depth(df)
-                    with tab67:
-                        self._render_operational_leverage_depth(df)
-                    with tab68:
-                        self._render_solvency_depth(df)
-                    with tab69:
-                        self._render_receivables_management(df)
-                    with tab70:
-                        self._render_dupont_analysis(df)
-
-                    with tab71:
-                        self._render_income_quality(df)
-
-                    with tab72:
-                        self._render_cash_flow_stability(df)
-
-                    with tab73:
-                        self._render_funding_efficiency(df)
-
-                    with tab74:
-                        self._render_defensive_posture(df)
-
-                    with tab75:
-                        self._render_income_stability(df)
-
-                    with tab76:
-                        self._render_fixed_asset_efficiency(df)
-
-                    with tab77:
-                        self._render_equity_reinvestment(df)
-
-                    with tab78:
-                        self._render_revenue_predictability(df)
-
-                    with tab79:
-                        self._render_liability_management(df)
-
-                    with tab86:
-                        self._render_internal_growth_capacity(df)
-
-                    with tab171:
-                        self._render_obligation_coverage(df)
-
-                    with tab80:
-                        self._render_capital_preservation(df)
-
-                    with tab81:
-                        self._render_debt_discipline(df)
-
-                    with tab82:
-                        self._render_profit_sustainability(df)
-
-                    with tab83:
-                        self._render_asset_deployment_efficiency(df)
-
-                    with tab84:
-                        self._render_profit_conversion(df)
-
-                    with tab85:
-                        self._render_structural_strength(df)
-
-                    with tab169:
-                        self._render_income_resilience(df)
-
-                    with tab86:
-                        self._render_payout_discipline(df)
-
-                    with tab87:
-                        self._render_operating_momentum(df)
-
-                    with tab88:
-                        self._render_operational_efficiency(df)
-
-                    with tab89:
-                        self._render_income_retention(df)
-
-                    with tab90:
-                        self._render_debt_management(df)
-
-                    with tab91:
-                        self._render_equity_preservation(df)
-
-                    with tab92:
-                        self._render_financial_productivity(df)
-
-                    with tab93:
-                        self._render_resource_optimization(df)
-
-                    with tab94:
-                        self._render_capital_discipline(df)
-
-                    with tab95:
-                        self._render_valuation_signal(df)
-
-                    with tab96:
-                        self._render_cost_control(df)
-
-                    with tab97:
-                        self._render_revenue_quality_index(df)
-
-                    with tab98:
-                        self._render_fixed_cost_leverage_ratio(df)
-
-                    with tab99:
-                        self._render_cash_conversion_efficiency(df)
-
-                    with tab100:
-                        self._render_receivables_turnover(df)
-
-                    with tab101:
-                        self._render_payables_turnover(df)
-
-                    with tab102:
-                        self._render_inventory_turnover(df)
-
-                    with tab103:
-                        self._render_cash_conversion_cycle(df)
-
-                    with tab104:
-                        self._render_operating_cash_flow_ratio(df)
-
-                    with tab105:
-                        self._render_dividend_payout(df)
-
-                    with tab106:
-                        self._render_operating_leverage(df)
-
-                    with tab107:
-                        self._render_debt_to_capital(df)
-
-                    with tab108:
-                        self._render_depreciation_burden(df)
-
-                    with tab109:
-                        self._render_debt_quality(df)
-                    with tab110:
-                        self._render_operating_income_quality(df)
-                    with tab111:
-                        self._render_capital_adequacy(df)
-                    with tab112:
-                        self._render_liability_coverage_strength(df)
-                    with tab113:
-                        self._render_net_debt_position(df)
-                    with tab114:
-                        self._render_revenue_cash_realization(df)
-                    with tab115:
-                        self._render_expense_ratio_discipline(df)
-                    with tab116:
-                        self._render_funding_mix_balance(df)
-                    with tab117:
-                        self._render_inventory_holding_cost(df)
-                    with tab118:
-                        self._render_capex_to_revenue(df)
-                    with tab119:
-                        self._render_inventory_coverage(df)
-                    with tab120:
-                        self._render_debt_burden_index(df)
-                    with tab121:
-                        self._render_payout_resilience(df)
-                    with tab122:
-                        self._render_noncurrent_asset_ratio(df)
-                    with tab123:
-                        self._render_operating_expense_ratio(df)
-                    with tab124:
-                        self._render_internal_growth_rate(df)
-                    with tab125:
-                        self._render_asset_lightness(df)
-                    with tab126:
-                        self._render_net_worth_growth(df)
-                    with tab127:
-                        self._render_cash_flow_to_debt(df)
-                    with tab128:
-                        self._render_debt_to_equity(df)
-                    with tab129:
-                        self._render_operating_margin(df)
-                    with tab130:
-                        self._render_revenue_growth(df)
-                    with tab131:
-                        self._render_earnings_to_debt(df)
-                    with tab132:
-                        self._render_profit_retention_power(df)
-
-                    # Report download
+                    # Report download & data explorer (always visible)
                     self._render_report_download(df)
-
-                    # Data explorer at bottom
                     self._render_data_explorer(df, workbook)
 
                 else:

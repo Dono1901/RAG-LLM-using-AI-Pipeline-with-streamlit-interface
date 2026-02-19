@@ -3,7 +3,14 @@ Centralized configuration for the RAG-LLM Financial system.
 All hardcoded values are collected here with environment variable overrides.
 """
 
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Load ALL env vars from .env (including OLLAMA_HOST for the ollama client)
+_ENV_FILE = Path(__file__).parent / ".env"
+load_dotenv(_ENV_FILE)
 
 
 class Settings(BaseSettings):

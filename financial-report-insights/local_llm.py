@@ -356,19 +356,38 @@ class LocalLLM:
 
 
 class LocalEmbedder:
-    """Local embeddings via Ollama-compatible API (Docker Model Runner)."""
+    """Local embeddings via OpenAI-compatible API (Docker Model Runner)."""
 
     def __init__(self, model_name: str = "mxbai-embed-large"):
         """
-        Initialize the embedder using an Ollama-served embedding model.
+        Initialize the embedder using the OpenAI-compatible /v1/embeddings endpoint.
+
+        DMR does not support the Ollama /api/embed endpoint, so we use
+        the OpenAI-compatible /v1/embeddings API via httpx instead.
 
         Args:
-            model_name: Ollama model name for embeddings
+            model_name: Model name for embeddings
         """
+        import os
+        import httpx
+
         self.model_name = model_name
+        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self._url = f"{host.rstrip('/')}/v1/embeddings"
+        self._client = httpx.Client(timeout=60.0)
         # Probe to detect embedding dimension
-        probe = ollama.embed(model=self.model_name, input=["dimension probe"])
-        self.dimension = len(probe["embeddings"][0])
+        probe = self._request_embeddings(["dimension probe"])
+        self.dimension = len(probe[0])
+
+    def _request_embeddings(self, texts: list) -> list:
+        """Call the OpenAI-compatible embeddings endpoint."""
+        resp = self._client.post(self._url, json={
+            "model": self.model_name,
+            "input": texts,
+        })
+        resp.raise_for_status()
+        data = resp.json()
+        return [item["embedding"] for item in data["data"]]
 
     def embed(self, text: str) -> list:
         """
@@ -380,8 +399,7 @@ class LocalEmbedder:
         Returns:
             List of floats (embedding vector)
         """
-        result = ollama.embed(model=self.model_name, input=[text])
-        return result["embeddings"][0]
+        return self._request_embeddings([text])[0]
 
     def embed_batch(self, texts: list) -> list:
         """
@@ -393,5 +411,4 @@ class LocalEmbedder:
         Returns:
             List of embedding vectors
         """
-        result = ollama.embed(model=self.model_name, input=texts)
-        return result["embeddings"]
+        return self._request_embeddings(texts)

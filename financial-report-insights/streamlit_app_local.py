@@ -71,7 +71,7 @@ def load_rag_system():
     return SimpleRAG(
         docs_folder="./documents",
         llm_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        embedding_model=os.getenv("EMBEDDING_MODEL", settings.embedding_model)
     )
 
 
