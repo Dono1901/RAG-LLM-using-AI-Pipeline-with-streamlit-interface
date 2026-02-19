@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -41,6 +46,23 @@ jobs:
         run: |
           python -m pytest tests/ -v --tb=short --cov=. --cov-report=term-missing --cov-report=xml
 
+      - name: Check coverage threshold
+        if: matrix.python-version == '3.12'
+        working-directory: financial-report-insights
+        run: |
+          COVERAGE=$(python -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('coverage.xml')
+          rate = float(tree.getroot().get('line-rate', 0))
+          print(f'{rate * 100:.1f}')
+          ")
+          echo "Coverage: ${COVERAGE}%"
+          python -c "
+          rate = float('${COVERAGE}')
+          if rate < 80:
+              print(f'::warning::Coverage {rate}% is below 80% threshold')
+          "
+
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
@@ -48,7 +70,7 @@ jobs:
           name: coverage-report
           path: financial-report-insights/coverage.xml
 
-  lint:
+  lint-and-security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,12 +80,130 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install linters
-        run: pip install ruff
+      - name: Install tools
+        run: pip install ruff bandit pip-audit
 
-      - name: Run ruff check
+      - name: Ruff lint check
         working-directory: financial-report-insights
         run: ruff check . --select E,W,F --ignore E501
+
+      - name: Ruff format check
+        working-directory: financial-report-insights
+        run: ruff format --check . || echo "::warning::Code formatting issues detected"
+
+      - name: Bandit security scan
+        working-directory: financial-report-insights
+        run: |
+          bandit -r . -x ./tests --format json --output bandit-report.json -ll || true
+          FINDINGS=$(python -c "import json; d=json.load(open('bandit-report.json')); print(len(d.get('results',[])))")
+          echo "Bandit findings: $FINDINGS"
+          if [ "$FINDINGS" -gt 0 ]; then
+            echo "::warning::Bandit found $FINDINGS security issue(s)"
+            python -c "
+          import json
+          d = json.load(open('bandit-report.json'))
+          for r in d.get('results', [])[:5]:
+              print(f\"::warning file={r['filename']},line={r['line_number']}::{r['issue_text']}\")
+          "
+          fi
+
+      - name: Dependency vulnerability audit
+        working-directory: financial-report-insights
+        run: |
+          pip-audit -r requirements.txt --format json --output audit-report.json || true
+          VULNS=$(python -c "import json; d=json.load(open('audit-report.json')); print(len(d))" 2>/dev/null || echo "0")
+          if [ "$VULNS" -gt 0 ]; then
+            echo "::warning::pip-audit found $VULNS vulnerability(ies)"
+          fi
+
+  auto-format:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Auto-format code
+        working-directory: financial-report-insights
+        run: |
+          ruff format .
+          ruff check . --select E,W,F --ignore E501 --fix || true
+
+      - name: Commit formatting fixes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-format code [skip ci]"
+          file_pattern: "financial-report-insights/**/*.py"
+
+  pr-summary:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [test, lint-and-security]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: ./coverage-data
+        continue-on-error: true
+
+      - name: Post PR summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let coveragePct = 'N/A';
+            try {
+              const xml = fs.readFileSync('./coverage-data/coverage.xml', 'utf8');
+              const match = xml.match(/line-rate="([^"]+)"/);
+              if (match) coveragePct = (parseFloat(match[1]) * 100).toFixed(1) + '%';
+            } catch (e) {}
+
+            const body = `## CI Summary
+
+            | Check | Status |
+            |-------|--------|
+            | Tests (3.11, 3.12, 3.13) | ${{ needs.test.result == 'success' && 'Passed' || 'Failed' }} |
+            | Lint + Security | ${{ needs.lint-and-security.result == 'success' && 'Passed' || 'Failed' }} |
+            | Coverage | ${coveragePct} |
+
+            *Auto-generated by CI*`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes('## CI Summary'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
 
   docker-build:
     runs-on: ubuntu-latest
@@ -82,3 +222,55 @@ jobs:
           tags: rag-financial-insights:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  collect-metrics:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test, lint-and-security]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: financial-report-insights
+        continue-on-error: true
+
+      - name: Collect metrics
+        id: metrics
+        run: python .github/scripts/metrics_collector.py
+
+      - name: Commit metrics
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/metrics/history.json
+          git diff --cached --quiet || git commit -m "metrics: update CI metrics [skip ci]"
+          git push || true
+
+      - name: Create regression issue
+        if: steps.metrics.outputs.has_regressions == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let details = '';
+            try {
+              const data = JSON.parse(fs.readFileSync('.github/metrics/regressions.json', 'utf8'));
+              details = data.regressions.map(r => `- ${r}`).join('\n');
+            } catch (e) { details = 'See workflow logs for details.'; }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Regression] Metrics regression detected on ${new Date().toISOString().split('T')[0]}`,
+              body: `## Regression Detected\n\n${details}\n\nCommit: ${context.sha}\n\n*Auto-generated by CI metrics collector*`,
+              labels: ['regression', 'needs-attention'],
+            });

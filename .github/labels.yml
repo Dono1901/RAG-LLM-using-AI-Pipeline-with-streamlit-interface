@@ -1,0 +1,67 @@
+# Label definitions for the RAG-LLM project
+# Apply with: gh label create "<name>" --color "<color>" --description "<description>"
+
+# --- Type labels ---
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+- name: enhancement
+  color: "a2eeef"
+  description: "New feature or request"
+- name: documentation
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+- name: tests
+  color: "bfd4f2"
+  description: "Test additions or improvements"
+
+# --- Component labels ---
+- name: "component: analyzer"
+  color: "5319e7"
+  description: "Financial analyzer module"
+- name: "component: ui"
+  color: "e99695"
+  description: "Streamlit UI / insights page"
+- name: "component: api"
+  color: "f9d0c4"
+  description: "FastAPI REST/SSE layer"
+- name: "component: docker"
+  color: "0e8a16"
+  description: "Docker / Docker Compose / DMR"
+- name: "component: ci-cd"
+  color: "fbca04"
+  description: "GitHub Actions / CI/CD workflows"
+
+# --- Status labels ---
+- name: triage
+  color: "ededed"
+  description: "Needs initial assessment"
+- name: stale
+  color: "c2e0c6"
+  description: "No activity for 90+ days"
+- name: needs-attention
+  color: "e11d48"
+  description: "Requires immediate human review"
+
+# --- Automated labels ---
+- name: repo-health
+  color: "1d76db"
+  description: "Auto-generated repository health report"
+- name: regression
+  color: "b60205"
+  description: "Auto-detected metric regression"
+- name: security
+  color: "ee0701"
+  description: "Security vulnerability or concern"
+- name: coverage-drop
+  color: "ff7619"
+  description: "Auto-detected test coverage decrease"
+- name: tech-debt
+  color: "d4c5f9"
+  description: "Technical debt identified by automation"
+- name: doc-health
+  color: "0e8a16"
+  description: "Auto-generated documentation health report"
+- name: self-healed
+  color: "28a745"
+  description: "Issue was auto-fixed by self-healing workflow"

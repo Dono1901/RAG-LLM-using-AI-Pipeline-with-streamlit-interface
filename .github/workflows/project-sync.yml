@@ -1,0 +1,121 @@
+name: Project Sync
+
+on:
+  issues:
+    types: [opened, labeled]
+  pull_request:
+    types: [opened, closed]
+  schedule:
+    - cron: "0 9 1 * *"  # Monthly on the 1st at 9AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  auto-label-issues:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    steps:
+      - name: Auto-label by content keywords
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const text = `${issue.title} ${issue.body || ''}`.toLowerCase();
+            const labels = new Set();
+
+            // Component detection
+            if (text.match(/\b(analyzer|ratio|dupont|z-?score|f-?score)\b/))
+              labels.add('component: analyzer');
+            if (text.match(/\b(streamlit|ui|interface|page|widget)\b/))
+              labels.add('component: ui');
+            if (text.match(/\b(api|fastapi|endpoint|rest|sse)\b/))
+              labels.add('component: api');
+            if (text.match(/\b(docker|container|compose|dmr|model runner)\b/))
+              labels.add('component: docker');
+            if (text.match(/\b(ci|cd|workflow|action|github action|pipeline)\b/))
+              labels.add('component: ci-cd');
+
+            // Type detection
+            if (text.match(/\b(security|vulnerab|cve|exploit|injection)\b/))
+              labels.add('security');
+            if (text.match(/\b(test|coverage|pytest)\b/))
+              labels.add('tests');
+            if (text.match(/\b(doc|readme|docstring)\b/))
+              labels.add('documentation');
+
+            if (labels.size > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: [...labels],
+              });
+            }
+
+  stale-cleanup:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Mark and close stale issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date();
+            const staleThreshold = 90;   // days before marking stale
+            const closeThreshold = 104;  // 90 + 14 days before closing
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+              sort: 'updated',
+              direction: 'asc',
+            });
+
+            for (const issue of issues) {
+              if (issue.pull_request) continue;  // Skip PRs
+
+              // Skip automated report issues (they self-replace)
+              const labelNames = issue.labels.map(l => l.name);
+              if (labelNames.includes('repo-health') || labelNames.includes('doc-health'))
+                continue;
+
+              const lastUpdate = new Date(issue.updated_at);
+              const daysSince = (now - lastUpdate) / (1000 * 60 * 60 * 24);
+
+              if (daysSince > closeThreshold && labelNames.includes('stale')) {
+                // Close stale issues after grace period
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'not_planned',
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: 'Closing due to inactivity (90+ days with no updates after stale label). Reopen if still relevant.',
+                });
+              } else if (daysSince > staleThreshold && !labelNames.includes('stale')) {
+                // Mark as stale
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['stale'],
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: 'This issue has been automatically marked as stale due to 90 days of inactivity. It will be closed in 14 days unless there is new activity.',
+                });
+              }
+            }

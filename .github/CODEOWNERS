@@ -1,0 +1,16 @@
+# Default owner for everything
+* @dmpcg
+
+# Core financial analysis
+financial-report-insights/financial_analyzer.py @dmpcg
+financial-report-insights/ratio_framework.py @dmpcg
+
+# API layer
+financial-report-insights/api.py @dmpcg
+financial-report-insights/graph_store.py @dmpcg
+financial-report-insights/graph_retriever.py @dmpcg
+
+# Infrastructure
+.github/ @dmpcg
+docker-compose.yml @dmpcg
+financial-report-insights/Dockerfile @dmpcg
