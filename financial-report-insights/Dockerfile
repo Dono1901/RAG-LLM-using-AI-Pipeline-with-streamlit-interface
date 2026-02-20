@@ -48,15 +48,26 @@ USER appuser
 # Expose Streamlit + API ports
 EXPOSE 8501 8504
 
-# Health check using Streamlit's built-in health endpoint
+# Health check verifies BOTH Streamlit and FastAPI are responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health'); urllib.request.urlopen('http://localhost:8504/health')" || exit 1
 
 # Use tini as init process for proper signal forwarding
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sh", "-c", \
-    "uvicorn api:app --host 0.0.0.0 --port ${RAG_API_PORT:-8504} --log-level info & \
-     streamlit run streamlit_app_local.py \
+
+# Process supervisor: exits container if EITHER process dies, triggering restart policy
+CMD ["bash", "-c", "\
+    uvicorn api:app --host 0.0.0.0 --port ${RAG_API_PORT:-8504} --log-level info & \
+    UVICORN_PID=$!; \
+    streamlit run streamlit_app_local.py \
         --server.port=8501 \
         --server.address=0.0.0.0 \
-        --browser.gatherUsageStats=false"]
+        --browser.gatherUsageStats=false & \
+    STREAMLIT_PID=$!; \
+    trap 'kill $UVICORN_PID $STREAMLIT_PID 2>/dev/null; exit 1' TERM INT; \
+    while kill -0 $UVICORN_PID 2>/dev/null && kill -0 $STREAMLIT_PID 2>/dev/null; do \
+        sleep 5; \
+    done; \
+    echo 'Process exited unexpectedly, shutting down...'; \
+    kill $UVICORN_PID $STREAMLIT_PID 2>/dev/null; \
+    exit 1"]
