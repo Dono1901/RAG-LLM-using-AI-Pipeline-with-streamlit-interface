@@ -1,0 +1,191 @@
+"""Tests for shared export utility helpers in export_utils.py."""
+
+import pytest
+
+from export_utils import (
+    _PERCENT_KEYWORDS,
+    _DOLLAR_KEYWORDS,
+    _is_percent_key,
+    _is_dollar_key,
+    _CATEGORY_MAP,
+    _categorize,
+)
+
+
+# ---------------------------------------------------------------------------
+# _is_percent_key
+# ---------------------------------------------------------------------------
+
+class TestIsPercentKey:
+    def test_gross_margin_is_percent(self):
+        assert _is_percent_key("gross_margin") is True
+
+    def test_roe_is_percent(self):
+        assert _is_percent_key("roe") is True
+
+    def test_coverage_ratio_is_percent(self):
+        assert _is_percent_key("coverage_ratio") is True
+
+    def test_operating_margin_is_percent(self):
+        assert _is_percent_key("operating_margin") is True
+
+    def test_asset_turnover_is_percent(self):
+        assert _is_percent_key("asset_turnover") is True
+
+    def test_interest_rate_is_percent(self):
+        assert _is_percent_key("interest_rate") is True
+
+    def test_revenue_is_not_percent(self):
+        assert _is_percent_key("revenue") is False
+
+    def test_total_assets_is_not_percent(self):
+        assert _is_percent_key("total_assets") is False
+
+    def test_net_income_is_not_percent(self):
+        assert _is_percent_key("net_income") is False
+
+    def test_case_insensitive(self):
+        assert _is_percent_key("Gross_Margin") is True
+        assert _is_percent_key("GROSS_MARGIN") is True
+
+
+# ---------------------------------------------------------------------------
+# _is_dollar_key
+# ---------------------------------------------------------------------------
+
+class TestIsDollarKey:
+    def test_revenue_is_dollar(self):
+        assert _is_dollar_key("revenue") is True
+
+    def test_total_assets_is_dollar(self):
+        assert _is_dollar_key("total_assets") is True
+
+    def test_net_income_is_dollar(self):
+        assert _is_dollar_key("net_income") is True
+
+    def test_total_debt_is_dollar(self):
+        assert _is_dollar_key("total_debt") is True
+
+    def test_cash_and_equivalents_is_dollar(self):
+        assert _is_dollar_key("cash_and_equivalents") is True
+
+    def test_ebitda_is_dollar(self):
+        assert _is_dollar_key("ebitda") is True
+
+    def test_accounts_payable_is_dollar(self):
+        assert _is_dollar_key("accounts_payable") is True
+
+    def test_accounts_receivable_is_dollar(self):
+        assert _is_dollar_key("accounts_receivable") is True
+
+    def test_gross_margin_is_not_dollar(self):
+        assert _is_dollar_key("gross_margin") is False
+
+    def test_current_ratio_is_not_dollar(self):
+        assert _is_dollar_key("current_ratio") is False
+
+    def test_case_insensitive(self):
+        assert _is_dollar_key("Total_Assets") is True
+        assert _is_dollar_key("REVENUE") is True
+
+
+# ---------------------------------------------------------------------------
+# _categorize
+# ---------------------------------------------------------------------------
+
+class TestCategorize:
+    # Liquidity
+    def test_current_ratio_liquidity(self):
+        assert _categorize("current_ratio") == "Liquidity"
+
+    def test_quick_ratio_liquidity(self):
+        assert _categorize("quick_ratio") == "Liquidity"
+
+    def test_cash_ratio_liquidity(self):
+        assert _categorize("cash_ratio") == "Liquidity"
+
+    def test_working_capital_liquidity(self):
+        assert _categorize("working_capital") == "Liquidity"
+
+    # Profitability
+    def test_gross_margin_profitability(self):
+        assert _categorize("gross_margin") == "Profitability"
+
+    def test_operating_margin_profitability(self):
+        assert _categorize("operating_margin") == "Profitability"
+
+    def test_net_margin_profitability(self):
+        assert _categorize("net_margin") == "Profitability"
+
+    def test_roe_profitability(self):
+        assert _categorize("roe") == "Profitability"
+
+    def test_roa_profitability(self):
+        assert _categorize("roa") == "Profitability"
+
+    def test_roic_profitability(self):
+        assert _categorize("roic") == "Profitability"
+
+    # Leverage
+    def test_debt_to_equity_leverage(self):
+        assert _categorize("debt_to_equity") == "Leverage"
+
+    def test_debt_to_assets_leverage(self):
+        assert _categorize("debt_to_assets") == "Leverage"
+
+    def test_debt_ratio_leverage(self):
+        assert _categorize("debt_ratio") == "Leverage"
+
+    def test_equity_multiplier_leverage(self):
+        assert _categorize("equity_multiplier") == "Leverage"
+
+    def test_interest_coverage_leverage(self):
+        assert _categorize("interest_coverage") == "Leverage"
+
+    # Efficiency
+    def test_asset_turnover_efficiency(self):
+        assert _categorize("asset_turnover") == "Efficiency"
+
+    def test_inventory_turnover_efficiency(self):
+        assert _categorize("inventory_turnover") == "Efficiency"
+
+    def test_receivables_turnover_efficiency(self):
+        assert _categorize("receivables_turnover") == "Efficiency"
+
+    def test_payables_turnover_efficiency(self):
+        assert _categorize("payables_turnover") == "Efficiency"
+
+    # Unknown key falls back to Other
+    def test_unknown_key_returns_other(self):
+        assert _categorize("unknown_metric") == "Other"
+
+    def test_empty_string_returns_other(self):
+        assert _categorize("") == "Other"
+
+    def test_arbitrary_string_returns_other(self):
+        assert _categorize("price_to_earnings") == "Other"
+
+
+# ---------------------------------------------------------------------------
+# _CATEGORY_MAP completeness - all 19 keys are present
+# ---------------------------------------------------------------------------
+
+class TestCategoryMapCompleteness:
+    EXPECTED_KEYS = {
+        "current_ratio", "quick_ratio", "cash_ratio", "working_capital",
+        "gross_margin", "operating_margin", "net_margin", "roe", "roa", "roic",
+        "debt_to_equity", "debt_to_assets", "debt_ratio", "equity_multiplier",
+        "interest_coverage",
+        "asset_turnover", "inventory_turnover", "receivables_turnover",
+        "payables_turnover",
+    }
+
+    def test_category_map_has_19_entries(self):
+        assert len(_CATEGORY_MAP) == 19
+
+    def test_all_expected_keys_present(self):
+        assert set(_CATEGORY_MAP.keys()) == self.EXPECTED_KEYS
+
+    def test_all_categories_are_valid(self):
+        valid_categories = {"Liquidity", "Profitability", "Leverage", "Efficiency"}
+        assert set(_CATEGORY_MAP.values()).issubset(valid_categories)

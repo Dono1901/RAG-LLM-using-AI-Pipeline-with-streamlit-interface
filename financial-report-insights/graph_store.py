@@ -325,6 +325,128 @@ class Neo4jStore:
             logger.warning("Neo4j store_derived_from_edges failed: %s", exc)
             return 0
 
+    def store_credit_assessment(
+        self,
+        company_name: str,
+        scorecard,
+        debt_capacity,
+    ) -> Optional[str]:
+        """Persist a CreditScorecard and DebtCapacityResult as graph nodes.
+
+        Creates or merges a :Company node, then creates a :CreditAssessment node
+        linked via HAS_CREDIT_ASSESSMENT.  Uses UNWIND batching for the assessment
+        write so the pattern stays consistent with the rest of the store.
+
+        Args:
+            company_name: Identifier for the borrower (used as :Company.name).
+            scorecard: CreditScorecard instance from underwriting.py.
+            debt_capacity: DebtCapacityResult instance from underwriting.py.
+
+        Returns:
+            assessment_id string if successful, None on failure.
+        """
+        import json
+        from graph_schema import MERGE_COMPANY, MERGE_CREDIT_ASSESSMENTS_BATCH
+
+        assessment_id = hashlib.sha256(
+            f"{company_name}:{scorecard.grade}:{scorecard.total_score}".encode()
+        ).hexdigest()
+
+        # Serialise category_scores dict to a JSON string so Neo4j can store it
+        # as a single property (Neo4j does not support nested maps on nodes).
+        category_scores_json = json.dumps(scorecard.category_scores)
+
+        batch = [
+            {
+                "assessment_id": assessment_id,
+                "company_name": company_name,
+                "total_score": scorecard.total_score,
+                "grade": scorecard.grade,
+                "recommendation": scorecard.recommendation,
+                "category_scores": category_scores_json,
+                "strengths": list(scorecard.strengths),
+                "weaknesses": list(scorecard.weaknesses),
+                "max_additional_debt": (
+                    float(debt_capacity.max_additional_debt)
+                    if debt_capacity.max_additional_debt is not None
+                    else None
+                ),
+                "current_leverage": (
+                    float(debt_capacity.current_leverage)
+                    if debt_capacity.current_leverage is not None
+                    else None
+                ),
+            }
+        ]
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_COMPANY, name=company_name)
+                session.run(MERGE_CREDIT_ASSESSMENTS_BATCH, batch=batch)
+            logger.info(
+                "Stored credit assessment %s for company %s (score=%d grade=%s)",
+                assessment_id[:8],
+                company_name,
+                scorecard.total_score,
+                scorecard.grade,
+            )
+            return assessment_id
+        except Exception as exc:
+            logger.warning("Neo4j store_credit_assessment failed: %s", exc)
+            return None
+
+    def store_covenant_package(
+        self,
+        assessment_id: str,
+        covenant_package,
+    ) -> Optional[str]:
+        """Persist a CovenantPackage node linked to an existing CreditAssessment.
+
+        Uses UNWIND batching for the covenant write.  The :CreditAssessment node
+        must already exist (call store_credit_assessment first).
+
+        Args:
+            assessment_id: ID returned by store_credit_assessment.
+            covenant_package: CovenantPackage instance from underwriting.py.
+
+        Returns:
+            package_id string if successful, None on failure.
+        """
+        import json
+        from graph_schema import MERGE_COVENANT_PACKAGES_BATCH
+
+        package_id = hashlib.sha256(
+            f"{assessment_id}:{covenant_package.covenant_tier}".encode()
+        ).hexdigest()
+
+        # Serialise the nested financial_covenants dict to JSON string
+        financial_covenants_json = json.dumps(covenant_package.financial_covenants)
+
+        batch = [
+            {
+                "package_id": package_id,
+                "assessment_id": assessment_id,
+                "covenant_tier": covenant_package.covenant_tier,
+                "financial_covenants": financial_covenants_json,
+                "reporting_requirements": list(covenant_package.reporting_requirements),
+                "events_of_default": list(covenant_package.events_of_default),
+            }
+        ]
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_COVENANT_PACKAGES_BATCH, batch=batch)
+            logger.info(
+                "Stored covenant package %s (tier=%s) for assessment %s",
+                package_id[:8],
+                covenant_package.covenant_tier,
+                assessment_id[:8],
+            )
+            return package_id
+        except Exception as exc:
+            logger.warning("Neo4j store_covenant_package failed: %s", exc)
+            return None
+
     def link_fiscal_periods(self, period_labels_and_ids: List[Dict[str, str]]) -> int:
         """Create temporal PRECEDES/FOLLOWS edges between fiscal periods.
 

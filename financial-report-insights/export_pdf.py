@@ -22,62 +22,14 @@ from financial_analyzer import (
     ScenarioResult,
     safe_divide,
 )
-
-
-# ---------------------------------------------------------------------------
-# Key-name classification helpers (mirror export_xlsx logic)
-# ---------------------------------------------------------------------------
-
-_PERCENT_KEYWORDS = (
-    "margin", "ratio", "return", "yield", "roe", "roa", "roic",
-    "turnover", "coverage", "rate",
+from export_utils import (
+    _PERCENT_KEYWORDS,
+    _DOLLAR_KEYWORDS,
+    _is_percent_key,
+    _is_dollar_key,
+    _CATEGORY_MAP,
+    _categorize,
 )
-_DOLLAR_KEYWORDS = (
-    "revenue", "income", "assets", "debt", "equity", "cash",
-    "expense", "liabilities", "ebit", "ebitda", "capex",
-    "profit", "payable", "receivable", "inventory",
-)
-
-
-def _is_percent_key(key: str) -> bool:
-    lower = key.lower()
-    return any(kw in lower for kw in _PERCENT_KEYWORDS)
-
-
-def _is_dollar_key(key: str) -> bool:
-    lower = key.lower()
-    return any(kw in lower for kw in _DOLLAR_KEYWORDS)
-
-
-# ---------------------------------------------------------------------------
-# Ratio category grouping (same as xlsx)
-# ---------------------------------------------------------------------------
-
-_CATEGORY_MAP: Dict[str, str] = {
-    "current_ratio": "Liquidity",
-    "quick_ratio": "Liquidity",
-    "cash_ratio": "Liquidity",
-    "working_capital": "Liquidity",
-    "gross_margin": "Profitability",
-    "operating_margin": "Profitability",
-    "net_margin": "Profitability",
-    "roe": "Profitability",
-    "roa": "Profitability",
-    "roic": "Profitability",
-    "debt_to_equity": "Leverage",
-    "debt_to_assets": "Leverage",
-    "debt_ratio": "Leverage",
-    "equity_multiplier": "Leverage",
-    "interest_coverage": "Leverage",
-    "asset_turnover": "Efficiency",
-    "inventory_turnover": "Efficiency",
-    "receivables_turnover": "Efficiency",
-    "payables_turnover": "Efficiency",
-}
-
-
-def _categorize(key: str) -> str:
-    return _CATEGORY_MAP.get(key, "Other")
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,9 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT item_id IF NOT EXISTS FOR (i:LineItem) REQUIRE i.item_id IS UNIQUE",
     "CREATE CONSTRAINT ratio_id IF NOT EXISTS FOR (r:FinancialRatio) REQUIRE r.ratio_id IS UNIQUE",
     "CREATE CONSTRAINT score_id IF NOT EXISTS FOR (s:ScoringResult) REQUIRE s.score_id IS UNIQUE",
+    "CREATE CONSTRAINT assessment_id IF NOT EXISTS FOR (a:CreditAssessment) REQUIRE a.assessment_id IS UNIQUE",
+    "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (p:CovenantPackage) REQUIRE p.package_id IS UNIQUE",
+    "CREATE CONSTRAINT company_name IF NOT EXISTS FOR (c:Company) REQUIRE c.name IS UNIQUE",
 ]
 
 
@@ -252,6 +255,102 @@ SCORES_BY_PERIOD_LABEL = """
 MATCH (p:FiscalPeriod)-[:HAS_SCORE]->(s:ScoringResult)
 WHERE p.label = $period_label
 RETURN s.model AS model, s.value AS value, s.grade AS grade, s.interpretation AS interpretation
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 3: Credit assessment and covenant package nodes
+# ---------------------------------------------------------------------------
+#
+# (:Company {name})
+#   -[:HAS_CREDIT_ASSESSMENT]-> (:CreditAssessment {assessment_id, total_score, grade,
+#                                                    recommendation, category_scores,
+#                                                    strengths, weaknesses,
+#                                                    max_additional_debt, current_leverage})
+#
+# (:CreditAssessment)
+#   -[:REQUIRES_COVENANTS]-> (:CovenantPackage {package_id, covenant_tier,
+#                                               financial_covenants,
+#                                               reporting_requirements,
+#                                               events_of_default})
+#
+
+MERGE_COMPANY = """
+MERGE (c:Company {name: $name})
+RETURN c
+"""
+
+MERGE_CREDIT_ASSESSMENT = """
+MERGE (a:CreditAssessment {assessment_id: $assessment_id})
+SET a.total_score = $total_score,
+    a.grade = $grade,
+    a.recommendation = $recommendation,
+    a.category_scores = $category_scores,
+    a.strengths = $strengths,
+    a.weaknesses = $weaknesses,
+    a.max_additional_debt = $max_additional_debt,
+    a.current_leverage = $current_leverage
+WITH a
+MATCH (c:Company {name: $company_name})
+MERGE (c)-[:HAS_CREDIT_ASSESSMENT]->(a)
+RETURN a
+"""
+
+MERGE_CREDIT_ASSESSMENTS_BATCH = """
+UNWIND $batch AS row
+MERGE (a:CreditAssessment {assessment_id: row.assessment_id})
+SET a.total_score = row.total_score,
+    a.grade = row.grade,
+    a.recommendation = row.recommendation,
+    a.category_scores = row.category_scores,
+    a.strengths = row.strengths,
+    a.weaknesses = row.weaknesses,
+    a.max_additional_debt = row.max_additional_debt,
+    a.current_leverage = row.current_leverage
+WITH a, row
+MATCH (c:Company {name: row.company_name})
+MERGE (c)-[:HAS_CREDIT_ASSESSMENT]->(a)
+RETURN count(a) AS stored
+"""
+
+MERGE_COVENANT_PACKAGE = """
+MERGE (p:CovenantPackage {package_id: $package_id})
+SET p.covenant_tier = $covenant_tier,
+    p.financial_covenants = $financial_covenants,
+    p.reporting_requirements = $reporting_requirements,
+    p.events_of_default = $events_of_default
+WITH p
+MATCH (a:CreditAssessment {assessment_id: $assessment_id})
+MERGE (a)-[:REQUIRES_COVENANTS]->(p)
+RETURN p
+"""
+
+MERGE_COVENANT_PACKAGES_BATCH = """
+UNWIND $batch AS row
+MERGE (p:CovenantPackage {package_id: row.package_id})
+SET p.covenant_tier = row.covenant_tier,
+    p.financial_covenants = row.financial_covenants,
+    p.reporting_requirements = row.reporting_requirements,
+    p.events_of_default = row.events_of_default
+WITH p, row
+MATCH (a:CreditAssessment {assessment_id: row.assessment_id})
+MERGE (a)-[:REQUIRES_COVENANTS]->(p)
+RETURN count(p) AS stored
+"""
+
+CREDIT_ASSESSMENT_BY_COMPANY = """
+MATCH (c:Company {name: $company_name})-[:HAS_CREDIT_ASSESSMENT]->(a:CreditAssessment)
+OPTIONAL MATCH (a)-[:REQUIRES_COVENANTS]->(p:CovenantPackage)
+RETURN a.assessment_id AS assessment_id, a.total_score AS total_score,
+       a.grade AS grade, a.recommendation AS recommendation,
+       a.category_scores AS category_scores,
+       a.strengths AS strengths, a.weaknesses AS weaknesses,
+       a.max_additional_debt AS max_additional_debt,
+       a.current_leverage AS current_leverage,
+       p.covenant_tier AS covenant_tier,
+       p.financial_covenants AS financial_covenants,
+       p.reporting_requirements AS reporting_requirements,
+       p.events_of_default AS events_of_default
+ORDER BY a.total_score DESC
 """
 
 # ---------------------------------------------------------------------------
