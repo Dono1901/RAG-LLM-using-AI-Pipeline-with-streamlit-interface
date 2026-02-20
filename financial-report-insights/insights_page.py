@@ -240,7 +240,8 @@ class FinancialInsightsPage:
 
                     # Sub-tabs for selected category
                     entries = self.CATEGORY_TABS[selected_cat]
-                    sub_tabs = st.tabs([e[0] for e in entries])
+                    sub_tabs = st.tabs([label for label, _, _ in entries])
+
                     for tab, (label, method, needs_wb) in zip(sub_tabs, entries):
                         with tab:
                             if needs_wb:
@@ -3277,77 +3278,6 @@ class FinancialInsightsPage:
                 showlegend=False,
                 height=350,
             )
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.caption(result.summary)
-
-    def _render_capital_structure(self, df: pd.DataFrame):
-        """Render Capital Structure analysis tab."""
-        from financial_analyzer import CapitalStructureResult
-        data = self._dataframe_to_financial_data(df)
-        result: CapitalStructureResult = self.analyzer.capital_structure_analysis(data)
-
-        # Grade badge
-        grade_colors = {
-            "Conservative": "green", "Balanced": "blue",
-            "Aggressive": "orange", "Distressed": "red",
-        }
-        color = grade_colors.get(result.capital_grade, "gray")
-        st.markdown(
-            f"### Capital Structure Grade: "
-            f"<span style='color:{color};font-weight:bold'>{result.capital_grade}</span> "
-            f"({result.capital_score:.1f}/10)",
-            unsafe_allow_html=True,
-        )
-
-        # Key metrics
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("D/E Ratio", f"{result.debt_to_equity:.2f}" if result.debt_to_equity is not None else "N/A")
-        c2.metric("Interest Coverage", f"{result.interest_coverage:.1f}x" if result.interest_coverage is not None else "N/A")
-        c3.metric("Net Debt/EBITDA", f"{result.net_debt_to_ebitda:.2f}x" if result.net_debt_to_ebitda is not None else "N/A")
-        c4.metric("Equity Ratio", f"{result.equity_ratio:.1%}" if result.equity_ratio is not None else "N/A")
-
-        # Detail table
-        details = {
-            "Debt/Equity": result.debt_to_equity,
-            "Debt/Assets": result.debt_to_assets,
-            "Debt/EBITDA": result.debt_to_ebitda,
-            "Equity Multiplier": result.equity_multiplier,
-            "Interest Coverage": result.interest_coverage,
-            "Debt Service Coverage": result.debt_service_coverage,
-            "Net Debt": result.net_debt,
-            "Net Debt/EBITDA": result.net_debt_to_ebitda,
-            "Capitalization Rate": result.capitalization_rate,
-            "Equity Ratio": result.equity_ratio,
-            "WACC Estimate": result.wacc_estimate,
-            "Optimal Leverage Distance": result.optimal_leverage_distance,
-        }
-        rows = []
-        for k, v in details.items():
-            if v is not None:
-                if "Net Debt" == k:
-                    rows.append({"Metric": k, "Value": f"${v:,.0f}"})
-                elif "WACC" in k or "Ratio" in k.split()[-1:] or "Rate" in k:
-                    rows.append({"Metric": k, "Value": f"{v:.2%}"})
-                elif "Coverage" in k or "Multiplier" in k or "Distance" in k:
-                    rows.append({"Metric": k, "Value": f"{v:.2f}"})
-                else:
-                    rows.append({"Metric": k, "Value": f"{v:.2f}"})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-        # Capital structure chart
-        if result.equity_ratio is not None and result.debt_to_assets is not None:
-            import plotly.graph_objects as go
-            labels = ["Equity", "Debt"]
-            values = [result.equity_ratio, result.debt_to_assets]
-            fig = go.Figure(data=[go.Pie(
-                labels=labels,
-                values=values,
-                hole=0.4,
-                marker_colors=["#2ecc71", "#e74c3c"],
-            )])
-            fig.update_layout(title="Capital Composition", height=350)
             st.plotly_chart(fig, use_container_width=True)
 
         st.caption(result.summary)
@@ -6820,28 +6750,6 @@ class FinancialInsightsPage:
         details = {
             "Long-term Debt Ratio": result.long_term_debt_ratio,
             "Debt Cost Ratio": result.debt_cost_ratio,
-        }
-        rows = [[k, f"{v:.4f}" if v is not None else "N/A"] for k, v in details.items()]
-        st.table(pd.DataFrame(rows, columns=["Metric", "Value"]))
-        st.caption(result.summary)
-
-    def _render_dividend_sustainability(self, df: pd.DataFrame):
-        """Phase 99: Dividend Coverage tab."""
-        from financial_analyzer import DividendCoverageResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
-        result = analyzer.dividend_coverage_analysis(fd)
-        grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
-        color = grade_colors.get(result.dc_grade, "gray")
-        st.markdown(f"**Dividend Coverage Grade:** :{color}[{result.dc_grade}] ({result.dc_score}/10)")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Payout Ratio", f"{result.payout_ratio:.1%}" if result.payout_ratio is not None else "N/A")
-        c2.metric("Cash Coverage", f"{result.cash_coverage:.2f}x" if result.cash_coverage is not None else "N/A")
-        c3.metric("FCF Coverage", f"{result.fcf_coverage:.2f}x" if result.fcf_coverage is not None else "N/A")
-        c4.metric("Earnings Support", f"{result.earnings_support:.2f}x" if result.earnings_support is not None else "N/A")
-        details = {
-            "RE Growth": result.retained_earnings_growth,
-            "Div Yield Proxy": result.dividend_yield_proxy,
         }
         rows = [[k, f"{v:.4f}" if v is not None else "N/A"] for k, v in details.items()]
         st.table(pd.DataFrame(rows, columns=["Metric", "Value"]))

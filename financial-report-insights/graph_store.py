@@ -91,7 +91,7 @@ class Neo4jStore:
         Returns:
             Number of chunks stored.
         """
-        from graph_schema import MERGE_DOCUMENT, MERGE_CHUNK
+        from graph_schema import MERGE_DOCUMENT, MERGE_CHUNKS_BATCH
 
         stored = 0
         try:
@@ -100,20 +100,24 @@ class Neo4jStore:
                 file_type = chunks[0].get("type", "unknown") if chunks else "unknown"
                 session.run(MERGE_DOCUMENT, doc_id=doc_id, filename=doc_id, file_type=file_type)
 
+                # Build batch payload for UNWIND
+                batch = []
                 for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                     chunk_id = hashlib.sha256(
                         f"{doc_id}:{i}:{chunk.get('content', '')[:100]}".encode()
                     ).hexdigest()
-                    session.run(
-                        MERGE_CHUNK,
-                        chunk_id=chunk_id,
-                        content=chunk.get("content", ""),
-                        embedding=embedding,
-                        source=chunk.get("source", doc_id),
-                        chunk_index=i,
-                        doc_id=doc_id,
-                    )
-                    stored += 1
+                    batch.append({
+                        "chunk_id": chunk_id,
+                        "content": chunk.get("content", ""),
+                        "embedding": embedding,
+                        "source": chunk.get("source", doc_id),
+                        "chunk_index": i,
+                        "doc_id": doc_id,
+                    })
+
+                if batch:
+                    session.run(MERGE_CHUNKS_BATCH, batch=batch)
+                    stored = len(batch)
 
             logger.info("Stored %d chunks for %s in Neo4j", stored, doc_id)
         except Exception as exc:
@@ -136,7 +140,7 @@ class Neo4jStore:
             ratios: Dict of ratio_name -> {value, category}.
             scores: Dict of model_name -> {value, grade, interpretation}.
         """
-        from graph_schema import MERGE_FISCAL_PERIOD, MERGE_RATIO, MERGE_SCORE
+        from graph_schema import MERGE_FISCAL_PERIOD, MERGE_RATIOS_BATCH, MERGE_SCORES_BATCH
 
         period_id = hashlib.sha256(f"{doc_id}:{period_label}".encode()).hexdigest()
 
@@ -144,28 +148,34 @@ class Neo4jStore:
             with self._driver.session() as session:
                 session.run(MERGE_FISCAL_PERIOD, period_id=period_id, label=period_label, doc_id=doc_id)
 
+                # Batch all ratios into a single UNWIND query
+                ratio_batch = []
                 for name, data in (ratios or {}).items():
                     ratio_id = hashlib.sha256(f"{period_id}:{name}".encode()).hexdigest()
-                    session.run(
-                        MERGE_RATIO,
-                        ratio_id=ratio_id,
-                        name=name,
-                        value=data.get("value"),
-                        category=data.get("category", ""),
-                        period_id=period_id,
-                    )
+                    ratio_batch.append({
+                        "ratio_id": ratio_id,
+                        "name": name,
+                        "value": data.get("value"),
+                        "category": data.get("category", ""),
+                        "period_id": period_id,
+                    })
+                if ratio_batch:
+                    session.run(MERGE_RATIOS_BATCH, batch=ratio_batch)
 
+                # Batch all scores into a single UNWIND query
+                score_batch = []
                 for model, data in (scores or {}).items():
                     score_id = hashlib.sha256(f"{period_id}:{model}".encode()).hexdigest()
-                    session.run(
-                        MERGE_SCORE,
-                        score_id=score_id,
-                        model=model,
-                        value=data.get("value"),
-                        grade=data.get("grade", ""),
-                        interpretation=data.get("interpretation", ""),
-                        period_id=period_id,
-                    )
+                    score_batch.append({
+                        "score_id": score_id,
+                        "model": model,
+                        "value": data.get("value"),
+                        "grade": data.get("grade", ""),
+                        "interpretation": data.get("interpretation", ""),
+                        "period_id": period_id,
+                    })
+                if score_batch:
+                    session.run(MERGE_SCORES_BATCH, batch=score_batch)
 
             logger.info("Stored financial data for %s / %s", doc_id, period_label)
         except Exception as exc:
@@ -219,24 +229,33 @@ class Neo4jStore:
 
         Returns vector search results augmented with connected ratios and scores.
         """
-        from graph_schema import GRAPH_CONTEXT_FOR_CHUNK
+        from graph_schema import GRAPH_CONTEXT_FOR_CHUNKS_BATCH
 
         vector_results = self.vector_search(query_embedding, top_k, model_name)
+        if not vector_results:
+            return []
 
         enriched = []
         try:
             with self._driver.session() as session:
+                chunk_ids = [vr["chunk_id"] for vr in vector_results]
+                result = session.run(GRAPH_CONTEXT_FOR_CHUNKS_BATCH, chunk_ids=chunk_ids)
+
+                # Build lookup from chunk_id -> graph context
+                context_map: Dict[str, Dict[str, Any]] = {}
+                for record in result:
+                    context_map[record["chunk_id"]] = {
+                        "document": record["document"],
+                        "period": record["period"],
+                        "ratios": record["ratios"],
+                        "scores": record["scores"],
+                    }
+
                 for vr in vector_results:
-                    context = session.run(
-                        GRAPH_CONTEXT_FOR_CHUNK, chunk_id=vr["chunk_id"]
-                    )
-                    record = context.single()
                     entry = {**vr}
-                    if record:
-                        entry["document"] = record["document"]
-                        entry["period"] = record["period"]
-                        entry["ratios"] = record["ratios"]
-                        entry["scores"] = record["scores"]
+                    ctx = context_map.get(vr["chunk_id"])
+                    if ctx:
+                        entry.update(ctx)
                     enriched.append(entry)
         except Exception as exc:
             logger.warning("Neo4j graph_search traversal failed: %s", exc)

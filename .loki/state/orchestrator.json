@@ -1,20 +1,21 @@
 {
-  "phase": "post-consolidation",
-  "phase_name": "Option C Consolidation Complete",
+  "phase": "stream-chain-optimize",
+  "phase_name": "Stream-Chain Analysis + Optimize Pipeline Complete",
   "status": "completed",
-  "tasks_total": 6,
-  "tasks_completed": 6,
-  "last_committed_phase": "phase4-intelligence-integration",
-  "last_commit": "c4a6feb",
+  "tasks_total": 5,
+  "tasks_completed": 5,
+  "last_committed_phase": "stream-chain-optimize",
+  "last_commit": "pending",
   "consolidation_applied": true,
   "consolidation_date": "2026-02-13",
-  "methods_removed": 236,
-  "dataclasses_removed": 239,
-  "test_files_deleted": 237,
-  "tests_passing": 2637,
-  "analyzer_loc": 16678,
-  "insights_loc": 7937,
-  "methods_remaining": 161,
+  "optimization_date": "2026-02-20",
+  "methods_converted_to_scored_analysis": 40,
+  "methods_remaining_unconverted": 22,
+  "neo4j_n1_patterns_fixed": 4,
+  "tests_passing": 2677,
+  "analyzer_loc": 13618,
+  "insights_loc": 7563,
+  "methods_total": 165,
   "guardrails": {
     "max_phases_before_review": 5,
     "max_analyzer_loc": 15000,
@@ -22,13 +23,23 @@
     "require_commit_checkpoint": true,
     "max_methods_per_module": 100
   },
-  "deliverables": {
-    "ratio_framework": "financial-report-insights/ratio_framework.py (637 LOC, 18 ratios, verified)",
-    "dedup_map": ".loki/memory/semantic/dedup_map.json (54 clusters, 343 methods audited)",
-    "learning_infra": ".loki/memory/semantic/ (8 files: anti-patterns, baselines, registry, log)",
-    "guardrails": "orchestrator.json + CONTINUITY.md + MEMORY.md all synced"
+  "optimization_summary": {
+    "analyzer_loc_reduction": "16678 -> 13618 (-3060, -18.3%)",
+    "insights_loc_reduction": "7937 -> 7563 (-374, -4.7%)",
+    "net_code_change": "+1579 insertions, -4643 deletions",
+    "files_modified": 12,
+    "neo4j_batching": "4 N+1 query patterns replaced with UNWIND batching",
+    "config_tuning": "llm_cache_size_limit_mb 500->1000, embedding_dimension config-driven",
+    "test_fixes": "5 edge case test files updated"
   },
-  "next_action": "All consolidated work committed. Automatic git hooks active. Consider further LOC reduction (16,678 still exceeds 15K guardrail).",
-  "started_at": "2026-02-13T00:00:00Z",
-  "completed_at": "2026-02-13T00:00:00Z"
+  "deliverables": {
+    "scored_analysis_helper": "financial_analyzer.py:_scored_analysis() - generic 95-LOC engine for phase methods",
+    "neo4j_batching": "graph_store.py + graph_schema.py - 4 UNWIND batch queries",
+    "config_optimization": "config.py - 3 new settings for cache/embedding tuning",
+    "embedder_optimization": "local_llm.py - config-driven dimension, skip probe HTTP",
+    "insights_fix": "insights_page.py - restored sub_tabs variable"
+  },
+  "next_action": "Commit all changes. LOC now within 15K guardrail. 22 unconverted methods remain (incompatible patterns).",
+  "started_at": "2026-02-20T00:00:00Z",
+  "completed_at": "2026-02-20T00:00:00Z"
 }

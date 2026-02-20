@@ -34,14 +34,16 @@ class TestGraphSchema:
         from graph_schema import (
             MERGE_DOCUMENT, MERGE_CHUNK, MERGE_FISCAL_PERIOD,
             MERGE_LINE_ITEM, MERGE_RATIO, MERGE_SCORE,
-            VECTOR_SEARCH, GRAPH_CONTEXT_FOR_CHUNK,
+            MERGE_CHUNKS_BATCH, MERGE_RATIOS_BATCH, MERGE_SCORES_BATCH,
+            VECTOR_SEARCH, GRAPH_CONTEXT_FOR_CHUNK, GRAPH_CONTEXT_FOR_CHUNKS_BATCH,
             RATIOS_BY_PERIOD, SCORES_BY_PERIOD,
         )
         # All should be non-empty strings
         for tmpl in [
             MERGE_DOCUMENT, MERGE_CHUNK, MERGE_FISCAL_PERIOD,
             MERGE_LINE_ITEM, MERGE_RATIO, MERGE_SCORE,
-            VECTOR_SEARCH, GRAPH_CONTEXT_FOR_CHUNK,
+            MERGE_CHUNKS_BATCH, MERGE_RATIOS_BATCH, MERGE_SCORES_BATCH,
+            VECTOR_SEARCH, GRAPH_CONTEXT_FOR_CHUNK, GRAPH_CONTEXT_FOR_CHUNKS_BATCH,
             RATIOS_BY_PERIOD, SCORES_BY_PERIOD,
         ]:
             assert isinstance(tmpl, str) and len(tmpl) > 10
@@ -116,8 +118,8 @@ class TestNeo4jStoreChunks:
         embeddings = [[0.1] * 10, [0.2] * 10]
         result = store.store_chunks(chunks, embeddings, "report.pdf")
         assert result == 2
-        # MERGE_DOCUMENT + 2x MERGE_CHUNK
-        assert session.run.call_count == 3
+        # MERGE_DOCUMENT + 1x MERGE_CHUNKS_BATCH (batched UNWIND)
+        assert session.run.call_count == 2
 
     def test_store_chunks_handles_failure(self, store, mock_driver):
         _, session = mock_driver
@@ -140,8 +142,8 @@ class TestNeo4jStoreFinancialData:
                 "altman_z": {"value": 3.2, "grade": "Safe", "interpretation": "Low risk"},
             },
         )
-        # MERGE_FISCAL_PERIOD + 2 MERGE_RATIO + 1 MERGE_SCORE
-        assert session.run.call_count == 4
+        # MERGE_FISCAL_PERIOD + 1 MERGE_RATIOS_BATCH + 1 MERGE_SCORES_BATCH
+        assert session.run.call_count == 3
 
 
 class TestNeo4jStoreVectorSearch:
@@ -168,21 +170,23 @@ class TestNeo4jStoreGraphSearch:
     def test_graph_search_enriches_results(self, store, mock_driver):
         _, session = mock_driver
 
-        # First call is vector search, subsequent are graph context
+        # First call is vector search, second is batched graph context
         vector_result = MagicMock()
         vector_result.__iter__ = MagicMock(return_value=iter([
             {"chunk_id": "abc", "content": "Revenue data", "source": "r.pdf", "score": 0.95},
         ]))
-        graph_result = MagicMock()
-        graph_record = {
-            "document": "r.pdf",
-            "period": "FY2024",
-            "ratios": [{"name": "current_ratio", "value": 2.0, "category": "liquidity"}],
-            "scores": [{"model": "altman_z", "value": 3.0, "grade": "Safe"}],
-        }
-        graph_result.single.return_value = graph_record
+        graph_batch_result = MagicMock()
+        graph_batch_result.__iter__ = MagicMock(return_value=iter([
+            {
+                "chunk_id": "abc",
+                "document": "r.pdf",
+                "period": "FY2024",
+                "ratios": [{"name": "current_ratio", "value": 2.0, "category": "liquidity"}],
+                "scores": [{"model": "altman_z", "value": 3.0, "grade": "Safe"}],
+            },
+        ]))
 
-        session.run.side_effect = [vector_result, graph_result]
+        session.run.side_effect = [vector_result, graph_batch_result]
         results = store.graph_search([0.1] * 10, top_k=3)
         assert len(results) == 1
         assert results[0]["document"] == "r.pdf"

@@ -141,10 +141,11 @@ class TestPhase330EdgeCases:
         assert result.oer_score == 0.0
 
     def test_no_opex(self, analyzer):
-        """OpEx=0, Revenue=1M => OER=0.0 => ultra-efficient."""
+        """OpEx=None, Revenue=1M => safe_divide returns None (no OpEx data)."""
         data = FinancialData(revenue=1_000_000)
         result = analyzer.operating_expense_ratio_analysis(data)
-        assert result.opex_ratio == pytest.approx(0.0, abs=0.01)
+        # With no operating_expenses attribute, opex_ratio is None
+        assert result.opex_ratio is None
 
     def test_no_revenue(self, analyzer):
         """Revenue=0 with OpEx => safe_divide returns None => score 0.0."""

@@ -199,7 +199,11 @@ class LocalLLM:
         """
         self.model = model
         self._cache: OrderedDict[str, str] | None = OrderedDict() if enable_cache else None
-        self._cache_maxsize = 128
+        try:
+            from config import settings as _cfg
+            self._cache_maxsize = _cfg.llm_cache_maxsize
+        except Exception:
+            self._cache_maxsize = 128
         self._timeout = timeout_seconds
         self._max_retries = max_retries
         self._executor = ThreadPoolExecutor(max_workers=1)
@@ -375,9 +379,17 @@ class LocalEmbedder:
         host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self._url = f"{host.rstrip('/')}/v1/embeddings"
         self._client = httpx.Client(timeout=60.0)
-        # Probe to detect embedding dimension
-        probe = self._request_embeddings(["dimension probe"])
-        self.dimension = len(probe[0])
+        # Use configured dimension to avoid probe HTTP request
+        try:
+            from config import settings as _cfg
+            cfg_dim = _cfg.embedding_dimension
+        except Exception:
+            cfg_dim = 0
+        if cfg_dim > 0:
+            self.dimension = cfg_dim
+        else:
+            probe = self._request_embeddings(["dimension probe"])
+            self.dimension = len(probe[0])
 
     def _request_embeddings(self, texts: list) -> list:
         """Call the OpenAI-compatible embeddings endpoint."""

@@ -91,6 +91,18 @@ MERGE (d)-[:HAS_CHUNK]->(c)
 RETURN c
 """
 
+MERGE_CHUNKS_BATCH = """
+UNWIND $batch AS row
+MERGE (c:Chunk {chunk_id: row.chunk_id})
+SET c.content = row.content, c.embedding = row.embedding, c.source = row.source,
+    c.chunk_index = row.chunk_index
+WITH c, row
+MATCH (d:Document {doc_id: row.doc_id})
+MERGE (c)-[:EXTRACTED_FROM]->(d)
+MERGE (d)-[:HAS_CHUNK]->(c)
+RETURN count(c) AS stored
+"""
+
 MERGE_FISCAL_PERIOD = """
 MERGE (p:FiscalPeriod {period_id: $period_id})
 SET p.label = $label
@@ -118,6 +130,16 @@ MERGE (p)-[:HAS_RATIO]->(r)
 RETURN r
 """
 
+MERGE_RATIOS_BATCH = """
+UNWIND $batch AS row
+MERGE (r:FinancialRatio {ratio_id: row.ratio_id})
+SET r.name = row.name, r.value = row.value, r.category = row.category
+WITH r, row
+MATCH (p:FiscalPeriod {period_id: row.period_id})
+MERGE (p)-[:HAS_RATIO]->(r)
+RETURN count(r) AS stored
+"""
+
 MERGE_SCORE = """
 MERGE (s:ScoringResult {score_id: $score_id})
 SET s.model = $model, s.value = $value, s.grade = $grade, s.interpretation = $interpretation
@@ -125,6 +147,17 @@ WITH s
 MATCH (p:FiscalPeriod {period_id: $period_id})
 MERGE (p)-[:HAS_SCORE]->(s)
 RETURN s
+"""
+
+MERGE_SCORES_BATCH = """
+UNWIND $batch AS row
+MERGE (s:ScoringResult {score_id: row.score_id})
+SET s.model = row.model, s.value = row.value, s.grade = row.grade,
+    s.interpretation = row.interpretation
+WITH s, row
+MATCH (p:FiscalPeriod {period_id: row.period_id})
+MERGE (p)-[:HAS_SCORE]->(s)
+RETURN count(s) AS stored
 """
 
 # ---------------------------------------------------------------------------
@@ -145,6 +178,17 @@ OPTIONAL MATCH (d)-[:PROVIDES_DATA_FOR]->(p:FiscalPeriod)
 OPTIONAL MATCH (p)-[:HAS_RATIO]->(r:FinancialRatio)
 OPTIONAL MATCH (p)-[:HAS_SCORE]->(s:ScoringResult)
 RETURN d.filename AS document, p.label AS period,
+       collect(DISTINCT {name: r.name, value: r.value, category: r.category}) AS ratios,
+       collect(DISTINCT {model: s.model, value: s.value, grade: s.grade}) AS scores
+"""
+
+GRAPH_CONTEXT_FOR_CHUNKS_BATCH = """
+UNWIND $chunk_ids AS cid
+MATCH (c:Chunk {chunk_id: cid})-[:EXTRACTED_FROM]->(d:Document)
+OPTIONAL MATCH (d)-[:PROVIDES_DATA_FOR]->(p:FiscalPeriod)
+OPTIONAL MATCH (p)-[:HAS_RATIO]->(r:FinancialRatio)
+OPTIONAL MATCH (p)-[:HAS_SCORE]->(s:ScoringResult)
+RETURN cid AS chunk_id, d.filename AS document, p.label AS period,
        collect(DISTINCT {name: r.name, value: r.value, category: r.category}) AS ratios,
        collect(DISTINCT {model: s.model, value: s.value, grade: s.grade}) AS scores
 """

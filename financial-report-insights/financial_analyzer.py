@@ -513,19 +513,6 @@ class LiquidityStressResult:
 
 
 @dataclass
-class DebtServiceResult:
-    """Debt service coverage analysis result."""
-    dscr: Optional[float] = None
-    interest_coverage: Optional[float] = None
-    debt_to_ebitda: Optional[float] = None
-    total_debt: float = 0.0
-    annual_debt_service: Optional[float] = None
-    free_cash_after_service: Optional[float] = None
-    risk_level: str = ""  # "Low", "Moderate", "High", "Critical"
-    summary: str = ""
-
-
-@dataclass
 class HealthDimension:
     """A single dimension of the composite health score."""
     name: str = ""
@@ -622,26 +609,6 @@ class RiskAdjustedResult:
     return_per_unit_risk: Optional[float] = None  # Return / Risk ratio
     risk_score: float = 0.0  # 0-10
     risk_grade: str = ""  # "Superior", "Favorable", "Neutral", "Elevated"
-    summary: str = ""
-
-
-@dataclass
-class CapitalStructureResult:
-    """Capital structure analysis result."""
-    debt_to_equity: Optional[float] = None
-    debt_to_assets: Optional[float] = None
-    debt_to_ebitda: Optional[float] = None
-    equity_multiplier: Optional[float] = None  # TA / Equity
-    interest_coverage: Optional[float] = None  # EBIT / Interest
-    debt_service_coverage: Optional[float] = None  # OCF / (Interest + Debt payments)
-    net_debt: Optional[float] = None  # Total Debt - Cash
-    net_debt_to_ebitda: Optional[float] = None
-    capitalization_rate: Optional[float] = None  # Debt / (Debt + Equity)
-    equity_ratio: Optional[float] = None  # Equity / TA
-    wacc_estimate: Optional[float] = None  # Simplified WACC
-    optimal_leverage_distance: Optional[float] = None  # Distance from optimal D/E
-    capital_score: float = 0.0  # 0-10
-    capital_grade: str = ""  # "Conservative", "Balanced", "Aggressive", "Distressed"
     summary: str = ""
 
 
@@ -5001,6 +4968,115 @@ class CharlieAnalyzer:
                 return grade
         return "C"
 
+    # ------------------------------------------------------------------
+    # Generic Scored Analysis Engine
+    # ------------------------------------------------------------------
+
+    def _scored_analysis(
+        self,
+        data: "FinancialData",
+        result_class: type,
+        ratio_defs: List[Tuple[str, str, str]],
+        score_field: str,
+        grade_field: str,
+        primary: str,
+        higher_is_better: bool,
+        thresholds: List[Tuple[float, float]],
+        adjustments: Optional[List[Tuple]] = None,
+        derived: Optional[List[Tuple]] = None,
+        label: str = "",
+    ):
+        """Generic scored ratio analysis engine.
+
+        Replaces the repetitive pattern of: extract ratios -> score ->
+        grade -> summarize found in 68+ phase analysis methods.
+
+        Parameters
+        ----------
+        data : FinancialData
+        result_class : dataclass type to instantiate
+        ratio_defs : list of (field_name, numerator_attr, denominator_attr)
+        score_field : attribute name for the score on result
+        grade_field : attribute name for the grade on result
+        primary : field_name of the primary ratio used for scoring
+        higher_is_better : True = higher ratio -> higher score
+        thresholds : list of (threshold, base_score) DESCENDING by threshold
+        adjustments : list of (condition_fn(ratios, data) -> bool, delta)
+        derived : list of (field_name, compute_fn(ratios, data) -> value)
+        label : analysis label for summary string
+        """
+        result = result_class()
+        ratios: Dict[str, Optional[float]] = {}
+
+        # Step 1: Compute ratios via safe_divide
+        for field_name, num_attr, denom_attr in ratio_defs:
+            val = safe_divide(
+                getattr(data, num_attr, None),
+                getattr(data, denom_attr, None),
+            )
+            setattr(result, field_name, val)
+            ratios[field_name] = val
+
+        # Step 2: Compute derived fields
+        for field_name, compute_fn in (derived or []):
+            val = compute_fn(ratios, data)
+            setattr(result, field_name, val)
+            ratios[field_name] = val
+
+        # Step 3: Check primary ratio
+        primary_val = ratios.get(primary)
+        if primary_val is None:
+            setattr(result, score_field, 0.0)
+            result.summary = f"{label}: Insufficient data for analysis."
+            return result
+
+        # Step 4: Score from thresholds
+        if higher_is_better:
+            # Descending: find first threshold where value >= threshold
+            sorted_t = sorted(thresholds, key=lambda x: x[0], reverse=True)
+            base = max(sorted_t[-1][1] - 1.0, 0.0)
+            for thresh, sc in sorted_t:
+                if primary_val >= thresh:
+                    base = sc
+                    break
+        else:
+            # Ascending: find first threshold where value <= threshold
+            sorted_t = sorted(thresholds, key=lambda x: x[0])
+            base = max(sorted_t[-1][1] - 1.0, 0.0)
+            for thresh, sc in sorted_t:
+                if primary_val <= thresh:
+                    base = sc
+                    break
+
+        # Step 5: Apply adjustments
+        adj = 0.0
+        for cond_fn, delta in (adjustments or []):
+            if cond_fn(ratios, data):
+                adj += delta
+
+        score = round(min(10.0, max(0.0, base + adj)), 1)
+        setattr(result, score_field, score)
+
+        # Step 6: Grade
+        if score >= 8:
+            grade = "Excellent"
+        elif score >= 6:
+            grade = "Good"
+        elif score >= 4:
+            grade = "Adequate"
+        else:
+            grade = "Weak"
+        setattr(result, grade_field, grade)
+
+        # Step 7: Summary
+        primary_str = f"{primary_val:.4f}" if primary_val is not None else "N/A"
+        result.summary = (
+            f"{label}: {primary}={primary_str}. "
+            f"Score={score}/10 ({grade})."
+        )
+
+        return result
+
     def financial_rating(self, data: FinancialData) -> FinancialRating:
         """Generate a comprehensive letter-grade financial rating.
 
@@ -5580,89 +5656,8 @@ class CharlieAnalyzer:
             summary=" | ".join(parts),
         )
 
-    def debt_service_analysis(self, data: FinancialData) -> DebtServiceResult:
-        """Analyze debt service capacity.
-
-        Computes DSCR, interest coverage, debt-to-EBITDA, and free cash
-        after debt service.
-
-        Parameters
-        ----------
-        data : FinancialData
-
-        Returns
-        -------
-        DebtServiceResult
-        """
-        ebitda = data.ebitda
-        ebit = data.ebit or data.operating_income
-        interest = data.interest_expense or 0
-        total_debt = data.total_debt or 0
-        ocf = data.operating_cash_flow
-        capex = data.capex or 0
-
-        # Interest coverage = EBIT / interest
-        int_coverage = safe_divide(ebit, interest) if interest > 0 else None
-
-        # Debt-to-EBITDA
-        debt_ebitda = safe_divide(total_debt, ebitda) if ebitda and ebitda > 0 else None
-
-        # Estimate annual debt service: interest + principal estimate
-        # Principal estimate: total_debt / 10 (rough 10-year amortization)
-        principal_estimate = total_debt / 10 if total_debt > 0 else 0
-        annual_service = interest + principal_estimate
-
-        # DSCR = OCF / annual_debt_service (or EBITDA / service as proxy)
-        if annual_service > 0:
-            if ocf is not None:
-                dscr = ocf / annual_service
-            elif ebitda is not None:
-                dscr = ebitda / annual_service
-            else:
-                dscr = None
-        else:
-            dscr = None
-
-        # Free cash after service
-        fcf_after = None
-        if ocf is not None:
-            fcf_after = ocf - capex - annual_service
-
-        # Risk level based on DSCR
-        if dscr is None:
-            risk = "N/A"
-        elif dscr >= 2.0:
-            risk = "Low"
-        elif dscr >= 1.25:
-            risk = "Moderate"
-        elif dscr >= 1.0:
-            risk = "High"
-        else:
-            risk = "Critical"
-
-        parts = []
-        if dscr is not None:
-            parts.append(f"DSCR: {dscr:.2f}x")
-        if int_coverage is not None:
-            parts.append(f"Interest Coverage: {int_coverage:.2f}x")
-        if debt_ebitda is not None:
-            parts.append(f"Debt/EBITDA: {debt_ebitda:.2f}x")
-        parts.append(f"Debt Service Risk: {risk}")
-        summary = " | ".join(parts) if parts else "Insufficient data."
-
-        return DebtServiceResult(
-            dscr=dscr,
-            interest_coverage=int_coverage,
-            debt_to_ebitda=debt_ebitda,
-            total_debt=total_debt,
-            annual_debt_service=annual_service if annual_service > 0 else None,
-            free_cash_after_service=fcf_after,
-            risk_level=risk,
-            summary=summary,
-        )
-
     # ------------------------------------------------------------------
-    # Phase 15 – Composite Financial Health Score
+    # Health Score Helpers (restored)
     # ------------------------------------------------------------------
 
     _HEALTH_GRADES = [
@@ -5873,28 +5868,40 @@ class CharlieAnalyzer:
 
         # --- 7. Debt Service (15%) ---
         ds_score = 50.0
-        ds = self.debt_service_analysis(data)
-        if ds.dscr is not None:
-            if ds.dscr >= 2.0:
+        ebit_ds = data.ebit or data.operating_income
+        interest_ds = data.interest_expense or 0
+        debt_ds = data.total_debt or 0
+        ocf_ds = data.operating_cash_flow
+        int_cov = safe_divide(ebit_ds, interest_ds) if interest_ds > 0 else None
+        principal_est = debt_ds / 10 if debt_ds > 0 else 0
+        annual_svc = interest_ds + principal_est
+        if annual_svc > 0 and ocf_ds is not None:
+            dscr = ocf_ds / annual_svc
+        elif annual_svc > 0 and data.ebitda is not None:
+            dscr = data.ebitda / annual_svc
+        else:
+            dscr = None
+        if dscr is not None:
+            if dscr >= 2.0:
                 ds_score += 30
-            elif ds.dscr >= 1.25:
+            elif dscr >= 1.25:
                 ds_score += 15
-            elif ds.dscr >= 1.0:
+            elif dscr >= 1.0:
                 ds_score -= 5
             else:
                 ds_score -= 30
-        if ds.interest_coverage is not None:
-            if ds.interest_coverage >= 5.0:
+        if int_cov is not None:
+            if int_cov >= 5.0:
                 ds_score += 15
-            elif ds.interest_coverage >= 3.0:
+            elif int_cov >= 3.0:
                 ds_score += 5
-            elif ds.interest_coverage < 1.5:
+            elif int_cov < 1.5:
                 ds_score -= 15
         ds_score = max(0, min(100, ds_score))
         dimensions.append(HealthDimension(
             name="Debt Service", score=ds_score, weight=0.15,
             status=self._traffic_light(ds_score),
-            detail=f"DSCR={ds.dscr:.2f}x" if ds.dscr is not None else "N/A",
+            detail=f"DSCR={dscr:.2f}x" if dscr is not None else "N/A",
         ))
 
         # --- Weighted overall ---
@@ -6555,159 +6562,6 @@ class CharlieAnalyzer:
             return_per_unit_risk=return_per_risk,
             risk_score=score,
             risk_grade=grade,
-            summary=summary,
-        )
-
-    def capital_structure_analysis(self, data: FinancialData) -> CapitalStructureResult:
-        """Analyze capital structure, leverage, and debt capacity.
-
-        Evaluates the mix of debt and equity financing, coverage ratios,
-        net debt position, and distance from optimal leverage.
-
-        Parameters
-        ----------
-        data : FinancialData
-
-        Returns
-        -------
-        CapitalStructureResult
-        """
-        equity = data.total_equity
-        ta = data.total_assets
-        debt = data.total_debt or 0
-        ebit = data.ebit or data.operating_income
-        ebitda = data.ebitda
-        interest = data.interest_expense or 0
-        ocf = data.operating_cash_flow
-        ni = data.net_income
-        cash = data.cash or (data.current_assets - data.current_liabilities
-                             if data.current_assets is not None and data.current_liabilities is not None
-                             else None)
-
-        # --- Debt / Equity ---
-        de_ratio = safe_divide(debt, equity) if equity is not None and equity > 0 else None
-
-        # --- Debt / Assets ---
-        da_ratio = safe_divide(debt, ta) if ta is not None and ta > 0 else None
-
-        # --- Debt / EBITDA ---
-        debt_ebitda = safe_divide(debt, ebitda) if ebitda is not None and ebitda > 0 else None
-
-        # --- Equity multiplier = TA / Equity ---
-        eq_mult = safe_divide(ta, equity) if ta is not None and equity is not None and equity > 0 else None
-
-        # --- Interest coverage = EBIT / Interest ---
-        int_coverage = safe_divide(ebit, interest) if ebit is not None and interest > 0 else None
-
-        # --- Debt service coverage = OCF / (Interest + assumed principal) ---
-        # Use OCF / Interest as proxy when principal payment unknown
-        dsc = safe_divide(ocf, interest) if ocf is not None and interest > 0 else None
-
-        # --- Net debt = Debt - Cash ---
-        net_debt_val = None
-        if cash is not None:
-            net_debt_val = debt - cash
-
-        # --- Net debt / EBITDA ---
-        nd_ebitda = safe_divide(net_debt_val, ebitda) if net_debt_val is not None and ebitda is not None and ebitda > 0 else None
-
-        # --- Capitalization rate = Debt / (Debt + Equity) ---
-        cap_rate = None
-        if equity is not None:
-            total_cap = debt + equity
-            cap_rate = safe_divide(debt, total_cap) if total_cap > 0 else None
-
-        # --- Equity ratio = Equity / TA ---
-        eq_ratio = safe_divide(equity, ta) if equity is not None and ta is not None and ta > 0 else None
-
-        # --- Simplified WACC ---
-        wacc = None
-        if equity is not None and ta is not None and ta > 0:
-            e_weight = equity / ta
-            d_weight = 1 - e_weight
-            cost_debt = safe_divide(interest, debt) if debt > 0 else 0.05
-            wacc = (e_weight * 0.10) + (d_weight * (cost_debt or 0.05) * (1 - self._tax_rate))
-
-        # --- Distance from optimal D/E (target 0.5-1.0 for most firms) ---
-        optimal_de = 0.75  # midpoint of healthy range
-        opt_distance = abs(de_ratio - optimal_de) if de_ratio is not None else None
-
-        # --- Scoring (0-10) ---
-        score = 5.0
-
-        # D/E ratio scoring
-        if de_ratio is not None:
-            if de_ratio <= 0.5:
-                score += 1.5  # Conservative
-            elif de_ratio <= 1.0:
-                score += 1.0  # Balanced
-            elif de_ratio <= 2.0:
-                score -= 0.5  # Moderate leverage
-            else:
-                score -= 2.0  # High leverage
-
-        # Interest coverage scoring
-        if int_coverage is not None:
-            if int_coverage >= 8.0:
-                score += 2.0
-            elif int_coverage >= 3.0:
-                score += 1.0
-            elif int_coverage >= 1.5:
-                score += 0.0
-            elif int_coverage < 1.0:
-                score -= 2.0
-
-        # Debt/EBITDA scoring
-        if debt_ebitda is not None:
-            if debt_ebitda <= 1.0:
-                score += 1.0
-            elif debt_ebitda <= 3.0:
-                score += 0.0
-            elif debt_ebitda > 5.0:
-                score -= 1.5
-
-        # Equity ratio scoring
-        if eq_ratio is not None:
-            if eq_ratio >= 0.60:
-                score += 0.5
-            elif eq_ratio < 0.20:
-                score -= 1.0
-
-        score = max(0, min(10, score))
-
-        # Grade
-        if score >= 8:
-            grade = "Conservative"
-        elif score >= 6:
-            grade = "Balanced"
-        elif score >= 4:
-            grade = "Aggressive"
-        else:
-            grade = "Distressed"
-
-        # Summary
-        parts = [f"Capital Structure: {grade} ({score:.1f}/10)"]
-        if de_ratio is not None:
-            parts.append(f"D/E={de_ratio:.2f}")
-        if int_coverage is not None:
-            parts.append(f"Interest Coverage={int_coverage:.1f}x")
-        summary = " | ".join(parts)
-
-        return CapitalStructureResult(
-            debt_to_equity=de_ratio,
-            debt_to_assets=da_ratio,
-            debt_to_ebitda=debt_ebitda,
-            equity_multiplier=eq_mult,
-            interest_coverage=int_coverage,
-            debt_service_coverage=dsc,
-            net_debt=net_debt_val,
-            net_debt_to_ebitda=nd_ebitda,
-            capitalization_rate=cap_rate,
-            equity_ratio=eq_ratio,
-            wacc_estimate=wacc,
-            optimal_leverage_distance=opt_distance,
-            capital_score=score,
-            capital_grade=grade,
             summary=summary,
         )
 
@@ -8445,616 +8299,201 @@ class CharlieAnalyzer:
         return result
 
     def profit_retention_power_analysis(self, data: FinancialData) -> ProfitRetentionPowerResult:
-        """Phase 356: Profit Retention Power Analysis.
-
-        Measures how effectively the company retains profits.
-        Primary metric: RE / Total Assets.
-        """
-        result = ProfitRetentionPowerResult()
-
-        re = data.retained_earnings
-        ta = data.total_assets
-        te = data.total_equity
-        rev = data.revenue
-        ni = data.net_income
-        div = data.dividends_paid
-
-        # RE / Total Assets
-        prp_ratio = safe_divide(re, ta)
-        result.prp_ratio = prp_ratio
-
-        # RE / Total Equity
-        result.re_to_equity = safe_divide(re, te)
-
-        # RE / Revenue
-        result.re_to_revenue = safe_divide(re, rev)
-
-        # Retention rate = (NI - Div) / NI
-        if ni is not None and ni > 0:
-            div_val = div if div is not None else 0.0
-            ret_rate = (ni - div_val) / ni
-            result.retention_rate = ret_rate
-            # RE growth capacity = (NI - Div) / RE
-            result.re_growth_capacity = safe_divide(ni - div_val, re)
-        else:
-            ret_rate = None
-
-        if prp_ratio is None:
-            result.prp_score = 0.0
-            result.prp_grade = ""
-            result.summary = "Profit Retention Power: Insufficient data."
-            return result
-
-        # Scoring
-        if prp_ratio >= 0.40:
-            base = 10.0
-        elif prp_ratio >= 0.30:
-            base = 8.5
-        elif prp_ratio >= 0.20:
-            base = 7.0
-        elif prp_ratio >= 0.15:
-            base = 5.5
-        elif prp_ratio >= 0.10:
-            base = 4.0
-        elif prp_ratio >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ret_rate is not None and ret_rate >= 0.60:
-            adj += 0.5
-        if re is not None and re > 0 and ta is not None and ta > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.prp_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.prp_grade = grade
-
-        # Spread vs benchmark (0.20)
-        result.prp_spread = prp_ratio - 0.20
-
-        prp_str = f"{prp_ratio:.4f}" if prp_ratio is not None else "N/A"
-        rr_str = f"{ret_rate:.4f}" if ret_rate is not None else "N/A"
-        rer_str = f"{result.re_to_equity:.4f}" if result.re_to_equity is not None else "N/A"
-        result.summary = (
-            f"Profit Retention Power: RE/Assets={prp_str}, "
-            f"Retention rate={rr_str}, "
-            f"RE/Equity={rer_str}. "
-            f"{'Above' if prp_ratio >= 0.20 else 'Below'} benchmark (0.20). "
-            f"Status: {grade}."
+        """Phase 356: Profit Retention Power Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=ProfitRetentionPowerResult,
+            ratio_defs=[
+                ("prp_ratio", "retained_earnings", "total_assets"),
+                ("re_to_equity", "retained_earnings", "total_equity"),
+                ("re_to_revenue", "retained_earnings", "revenue"),
+            ],
+            score_field="prp_score",
+            grade_field="prp_grade",
+            primary="prp_ratio",
+            higher_is_better=True,
+            thresholds=[(0.40, 10.0), (0.30, 8.5), (0.20, 7.0), (0.15, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: (
+                    d.net_income is not None and d.net_income > 0 and
+                    ((d.net_income - (d.dividends_paid or 0)) / d.net_income) >= 0.60
+                ), 0.5),
+                (lambda r, d: d.retained_earnings is not None and d.retained_earnings > 0 and d.total_assets is not None and d.total_assets > 0, 0.5),
+            ],
+            derived=[
+                ("retention_rate", lambda r, d: (d.net_income - (d.dividends_paid or 0)) / d.net_income if d.net_income is not None and d.net_income > 0 else None),
+                ("re_growth_capacity", lambda r, d: safe_divide(d.net_income - (d.dividends_paid or 0), d.retained_earnings) if d.net_income is not None and d.net_income > 0 else None),
+                ("prp_spread", lambda r, d: r["prp_ratio"] - 0.20 if r.get("prp_ratio") is not None else None),
+            ],
+            label="Profit Retention Power",
         )
-
         return result
 
     def earnings_to_debt_analysis(self, data: FinancialData) -> EarningsToDebtResult:
-        """Phase 353: Earnings To Debt Analysis.
-
-        Measures how well net income can service total debt.
-        Primary metric: NI / Total Debt.
-        """
-        result = EarningsToDebtResult()
-
-        ni = data.net_income
-        td = data.total_debt
-        ie = data.interest_expense
-        tl = data.total_liabilities
-
-        # NI / Total Debt
-        etd_ratio = safe_divide(ni, td)
-        result.etd_ratio = etd_ratio
-        result.earnings_yield_on_debt = etd_ratio
-
-        # NI / Interest Expense
-        ni_to_int = safe_divide(ni, ie)
-        result.ni_to_interest = ni_to_int
-
-        # NI / Total Liabilities
-        result.ni_to_liabilities = safe_divide(ni, tl)
-
-        # Debt payback from earnings
-        result.debt_years_from_earnings = safe_divide(td, ni)
-
-        if etd_ratio is None:
-            result.etd_score = 0.0
-            result.etd_grade = ""
-            result.summary = "Earnings To Debt: Insufficient data."
-            return result
-
-        # Scoring
-        if etd_ratio >= 0.40:
-            base = 10.0
-        elif etd_ratio >= 0.30:
-            base = 8.5
-        elif etd_ratio >= 0.20:
-            base = 7.0
-        elif etd_ratio >= 0.15:
-            base = 5.5
-        elif etd_ratio >= 0.10:
-            base = 4.0
-        elif etd_ratio >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ni_to_int is not None and ni_to_int >= 3.0:
-            adj += 0.5
-        if ni is not None and ni > 0 and td is not None and td > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.etd_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.etd_grade = grade
-
-        # Spread vs benchmark (0.20)
-        result.etd_spread = etd_ratio - 0.20
-
-        etd_str = f"{etd_ratio:.4f}" if etd_ratio is not None else "N/A"
-        nti_str = f"{ni_to_int:.2f}" if ni_to_int is not None else "N/A"
-        dye_str = f"{result.debt_years_from_earnings:.2f}" if result.debt_years_from_earnings is not None else "N/A"
-        result.summary = (
-            f"Earnings To Debt: NI/TD={etd_str}, "
-            f"NI/Interest={nti_str}x, "
-            f"Payback={dye_str} yrs. "
-            f"{'Above' if etd_ratio >= 0.20 else 'Below'} benchmark (0.20). "
-            f"Status: {grade}."
+        """Phase 353: Earnings To Debt Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=EarningsToDebtResult,
+            ratio_defs=[
+                ("etd_ratio", "net_income", "total_debt"),
+                ("ni_to_interest", "net_income", "interest_expense"),
+                ("ni_to_liabilities", "net_income", "total_liabilities"),
+            ],
+            score_field="etd_score",
+            grade_field="etd_grade",
+            primary="etd_ratio",
+            higher_is_better=True,
+            thresholds=[(0.40, 10.0), (0.30, 8.5), (0.20, 7.0), (0.15, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ni_to_interest") is not None and r["ni_to_interest"] >= 3.0, 0.5),
+                (lambda r, d: d.net_income is not None and d.net_income > 0 and d.total_debt is not None and d.total_debt > 0, 0.5),
+            ],
+            derived=[
+                ("earnings_yield_on_debt", lambda r, d: r.get("etd_ratio")),
+                ("debt_years_from_earnings", lambda r, d: safe_divide(d.total_debt, d.net_income)),
+                ("etd_spread", lambda r, d: r["etd_ratio"] - 0.20 if r.get("etd_ratio") is not None else None),
+            ],
+            label="Earnings To Debt",
         )
-
         return result
 
     def revenue_growth_analysis(self, data: FinancialData) -> RevenueGrowthResult:
-        """Phase 350: Revenue Growth Capacity Analysis.
-
-        Measures sustainable growth capacity via ROE * plowback.
-        Primary metric: Sustainable Growth Rate = ROE * (1 - Dividend Payout).
-        Supporting: ROE, plowback rate, revenue/assets.
-
-        Scoring:
-            SGR >= 0.15 => base 10
-            SGR >= 0.12 => base 8.5
-            SGR >= 0.10 => base 7.0
-            SGR >= 0.07 => base 5.5
-            SGR >= 0.05 => base 4.0
-            SGR >= 0.02 => base 2.5
-            SGR < 0.02  => base 1.0
-        Adjustments:
-            ROE >= 0.12 => +0.5
-            Both NI and TE > 0 => +0.5
-        """
-        result = RevenueGrowthResult()
-
-        roe = safe_divide(data.net_income, data.total_equity)
-        rev_asset = safe_divide(data.revenue, data.total_assets)
-
-        # Plowback = (NI - Dividends) / NI
-        plowback = None
-        if data.net_income is not None and data.net_income != 0:
-            div = data.dividends_paid or 0
-            plowback = (data.net_income - div) / data.net_income
-
-        result.roe = roe
-        result.plowback = plowback
-        result.revenue_per_asset = rev_asset
-
-        # Sustainable growth rate = ROE * plowback
-        sgr = None
-        if roe is not None and plowback is not None:
-            sgr = roe * plowback
-        result.sustainable_growth = sgr
-        result.rg_capacity = sgr
-
-        if sgr is not None and roe is not None:
-            result.rg_spread = sgr - roe
-
-        if sgr is None:
-            result.rg_score = 0.0
-            result.summary = "Revenue Growth: Insufficient data for analysis."
-            return result
-
-        if sgr >= 0.15:
-            base = 10.0
-        elif sgr >= 0.12:
-            base = 8.5
-        elif sgr >= 0.10:
-            base = 7.0
-        elif sgr >= 0.07:
-            base = 5.5
-        elif sgr >= 0.05:
-            base = 4.0
-        elif sgr >= 0.02:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if roe is not None and roe >= 0.12:
-            adj += 0.5
-        if data.net_income is not None and data.net_income > 0 and data.total_equity is not None and data.total_equity > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.rg_score = round(score, 1)
-
-        if score >= 8:
-            result.rg_grade = "Excellent"
-        elif score >= 6:
-            result.rg_grade = "Good"
-        elif score >= 4:
-            result.rg_grade = "Adequate"
-        else:
-            result.rg_grade = "Weak"
-
-        pb_str = f"{plowback:.4f}" if plowback is not None else "N/A"
-        ra_str = f"{rev_asset:.4f}" if rev_asset is not None else "N/A"
-        result.summary = (
-            f"Revenue Growth: SGR={sgr:.4f}, ROE={roe:.4f}, Plowback={pb_str}, "
-            f"Rev/Assets={ra_str}. "
-            f"Score={result.rg_score}/10 ({result.rg_grade})."
+        """Phase 350: Revenue Growth Capacity Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=RevenueGrowthResult,
+            ratio_defs=[
+                ("roe", "net_income", "total_equity"),
+                ("revenue_per_asset", "revenue", "total_assets"),
+            ],
+            score_field="rg_score",
+            grade_field="rg_grade",
+            primary="sustainable_growth",
+            higher_is_better=True,
+            thresholds=[(0.15, 10.0), (0.12, 8.5), (0.10, 7.0), (0.07, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("roe") is not None and r["roe"] >= 0.12, 0.5),
+                (lambda r, d: d.net_income is not None and d.net_income > 0 and d.total_equity is not None and d.total_equity > 0, 0.5),
+            ],
+            derived=[
+                ("plowback", lambda r, d: (d.net_income - (d.dividends_paid or 0)) / d.net_income if d.net_income is not None and d.net_income != 0 else None),
+                ("sustainable_growth", lambda r, d: r["roe"] * r["plowback"] if r.get("roe") is not None and r.get("plowback") is not None else None),
+                ("rg_capacity", lambda r, d: r.get("sustainable_growth")),
+                ("rg_spread", lambda r, d: r["sustainable_growth"] - r["roe"] if r.get("sustainable_growth") is not None and r.get("roe") is not None else None),
+            ],
+            label="Revenue Growth",
         )
-
         return result
 
     def operating_margin_analysis(self, data: FinancialData) -> OperatingMarginResult:
-        """Phase 349: Operating Margin Analysis.
-
-        Measures core operating profitability as OI/Revenue.
-        Primary metric: Operating Income / Revenue.
-        Supporting: EBIT margin, EBITDA margin, margin spread.
-
-        Scoring:
-            OI/Rev >= 0.25 => base 10
-            OI/Rev >= 0.20 => base 8.5
-            OI/Rev >= 0.15 => base 7.0
-            OI/Rev >= 0.10 => base 5.5
-            OI/Rev >= 0.05 => base 4.0
-            OI/Rev >= 0.02 => base 2.5
-            OI/Rev < 0.02  => base 1.0
-        Adjustments:
-            EBITDA margin >= 0.20 => +0.5
-            Both OI and Revenue > 0 => +0.5
-        """
-        result = OperatingMarginResult()
-
-        oi_rev = safe_divide(data.operating_income, data.revenue)
-        ebit_m = safe_divide(data.ebit, data.revenue)
-        ebitda_m = safe_divide(data.ebitda, data.revenue)
-
-        result.oi_to_revenue = oi_rev
-        result.operating_margin = oi_rev
-        result.ebit_margin = ebit_m
-        result.ebitda_margin = ebitda_m
-
-        if oi_rev is not None and ebitda_m is not None:
-            result.opm_spread = ebitda_m - oi_rev
-
-        if oi_rev is None:
-            result.opm_score = 0.0
-            result.summary = "Operating Margin: Insufficient data for analysis."
-            return result
-
-        if oi_rev >= 0.25:
-            base = 10.0
-        elif oi_rev >= 0.20:
-            base = 8.5
-        elif oi_rev >= 0.15:
-            base = 7.0
-        elif oi_rev >= 0.10:
-            base = 5.5
-        elif oi_rev >= 0.05:
-            base = 4.0
-        elif oi_rev >= 0.02:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ebitda_m is not None and ebitda_m >= 0.20:
-            adj += 0.5
-        if data.operating_income is not None and data.operating_income > 0 and data.revenue is not None and data.revenue > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.opm_score = round(score, 1)
-
-        if score >= 8:
-            result.opm_grade = "Excellent"
-        elif score >= 6:
-            result.opm_grade = "Good"
-        elif score >= 4:
-            result.opm_grade = "Adequate"
-        else:
-            result.opm_grade = "Weak"
-
-        ebit_str = f"{ebit_m:.4f}" if ebit_m is not None else "N/A"
-        ebitda_str = f"{ebitda_m:.4f}" if ebitda_m is not None else "N/A"
-        result.summary = (
-            f"Operating Margin: OI/Revenue={oi_rev:.4f}, EBIT Margin={ebit_str}, "
-            f"EBITDA Margin={ebitda_str}. "
-            f"Score={result.opm_score}/10 ({result.opm_grade})."
+        """Phase 349: Operating Margin Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=OperatingMarginResult,
+            ratio_defs=[
+                ("oi_to_revenue", "operating_income", "revenue"),
+                ("ebit_margin", "ebit", "revenue"),
+                ("ebitda_margin", "ebitda", "revenue"),
+            ],
+            score_field="opm_score",
+            grade_field="opm_grade",
+            primary="oi_to_revenue",
+            higher_is_better=True,
+            thresholds=[(0.25, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ebitda_margin") is not None and r["ebitda_margin"] >= 0.20, 0.5),
+                (lambda r, d: d.operating_income is not None and d.operating_income > 0 and d.revenue is not None and d.revenue > 0, 0.5),
+            ],
+            derived=[
+                ("operating_margin", lambda r, d: r.get("oi_to_revenue")),
+                ("opm_spread", lambda r, d: r["ebitda_margin"] - r["oi_to_revenue"] if r.get("oi_to_revenue") is not None and r.get("ebitda_margin") is not None else None),
+            ],
+            label="Operating Margin",
         )
-
         return result
 
     def debt_to_equity_analysis(self, data: FinancialData) -> DebtToEquityResult:
-        """Phase 348: Debt To Equity Analysis.
-
-        Measures financial leverage via total debt relative to equity.
-        Primary metric: TD/TE — lower means less reliance on debt.
-        Supporting: LT debt/equity, debt/assets, equity multiplier.
-
-        Scoring (lower is better):
-            TD/TE <= 0.30 => base 10
-            TD/TE <= 0.50 => base 8.5
-            TD/TE <= 0.80 => base 7.0
-            TD/TE <= 1.00 => base 5.5
-            TD/TE <= 1.50 => base 4.0
-            TD/TE <= 2.00 => base 2.5
-            TD/TE > 2.00  => base 1.0
-        Adjustments:
-            Debt/Assets <= 0.50 => +0.5
-            Both TD and TE > 0 => +0.5
-        """
-        result = DebtToEquityResult()
-
-        td_te = safe_divide(data.total_debt, data.total_equity)
-        d_a = safe_divide(data.total_debt, data.total_assets)
-
-        # Equity multiplier = TA / TE
-        eq_mult = safe_divide(data.total_assets, data.total_equity)
-
-        result.td_to_te = td_te
-        result.dte_ratio = td_te
-        result.debt_to_assets = d_a
-        result.equity_multiplier = eq_mult
-
-        # LT debt approximation: total_debt (proxy when LT not separate)
-        if data.total_debt is not None and data.total_equity is not None and data.total_equity != 0:
-            result.lt_debt_to_equity = data.total_debt / data.total_equity
-
-        if td_te is not None and d_a is not None:
-            result.dte_spread = td_te - d_a
-
-        if td_te is None:
-            result.dte_score = 0.0
-            result.summary = "Debt to Equity: Insufficient data for analysis."
-            return result
-
-        # Lower leverage is better
-        if td_te <= 0.30:
-            base = 10.0
-        elif td_te <= 0.50:
-            base = 8.5
-        elif td_te <= 0.80:
-            base = 7.0
-        elif td_te <= 1.00:
-            base = 5.5
-        elif td_te <= 1.50:
-            base = 4.0
-        elif td_te <= 2.00:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if d_a is not None and d_a <= 0.50:
-            adj += 0.5
-        if data.total_debt is not None and data.total_debt > 0 and data.total_equity is not None and data.total_equity > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.dte_score = round(score, 1)
-
-        if score >= 8:
-            result.dte_grade = "Excellent"
-        elif score >= 6:
-            result.dte_grade = "Good"
-        elif score >= 4:
-            result.dte_grade = "Adequate"
-        else:
-            result.dte_grade = "Weak"
-
-        em_str = f"{eq_mult:.2f}" if eq_mult is not None else "N/A"
-        da_str = f"{d_a:.4f}" if d_a is not None else "N/A"
-        result.summary = (
-            f"Debt to Equity: TD/TE={td_te:.4f}, Debt/Assets={da_str}, "
-            f"Equity Multiplier={em_str}. "
-            f"Score={result.dte_score}/10 ({result.dte_grade})."
+        """Phase 348: Debt To Equity Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=DebtToEquityResult,
+            ratio_defs=[
+                ("td_to_te", "total_debt", "total_equity"),
+                ("debt_to_assets", "total_debt", "total_assets"),
+                ("equity_multiplier", "total_assets", "total_equity"),
+            ],
+            score_field="dte_score",
+            grade_field="dte_grade",
+            primary="td_to_te",
+            higher_is_better=False,
+            thresholds=[(0.30, 10.0), (0.50, 8.5), (0.80, 7.0), (1.00, 5.5), (1.50, 4.0), (2.00, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_to_assets") is not None and r["debt_to_assets"] <= 0.50, 0.5),
+                (lambda r, d: d.total_debt is not None and d.total_debt > 0 and d.total_equity is not None and d.total_equity > 0, 0.5),
+            ],
+            derived=[
+                ("dte_ratio", lambda r, d: r.get("td_to_te")),
+                ("lt_debt_to_equity", lambda r, d: d.total_debt / d.total_equity if d.total_debt is not None and d.total_equity is not None and d.total_equity != 0 else None),
+                ("dte_spread", lambda r, d: r["td_to_te"] - r["debt_to_assets"] if r.get("td_to_te") is not None and r.get("debt_to_assets") is not None else None),
+            ],
+            label="Debt to Equity",
         )
-
         return result
 
     def cash_flow_to_debt_analysis(self, data: FinancialData) -> CashFlowToDebtResult:
-        """Phase 347: Cash Flow To Debt Analysis.
-
-        Measures ability to service debt from operating cash flows.
-        Primary metric: OCF/Total Debt — higher means faster potential paydown.
-        Supporting: FCF/TD, debt payback years, OCF/Interest.
-
-        Scoring:
-            OCF/TD >= 0.50 => base 10
-            OCF/TD >= 0.40 => base 8.5
-            OCF/TD >= 0.30 => base 7.0
-            OCF/TD >= 0.20 => base 5.5
-            OCF/TD >= 0.10 => base 4.0
-            OCF/TD >= 0.05 => base 2.5
-            OCF/TD < 0.05  => base 1.0
-        Adjustments:
-            OCF/Interest >= 3.0 => +0.5
-            Both OCF and TD > 0 => +0.5
-        """
-        result = CashFlowToDebtResult()
-
-        ocf_td = safe_divide(data.operating_cash_flow, data.total_debt)
-        ocf_int = safe_divide(data.operating_cash_flow, data.interest_expense)
-
-        # FCF = OCF - CapEx
-        fcf_td = None
-        if data.operating_cash_flow is not None and data.capex is not None and data.total_debt is not None and data.total_debt != 0:
-            fcf = data.operating_cash_flow - (data.capex or 0)
-            fcf_td = fcf / data.total_debt
-
-        result.ocf_to_td = ocf_td
-        result.fcf_to_td = fcf_td
-        result.ocf_to_interest = ocf_int
-        result.cf_to_debt = ocf_td
-
-        # Debt payback years = TD / OCF
-        if data.total_debt is not None and data.operating_cash_flow is not None and data.operating_cash_flow > 0:
-            result.debt_payback_years = data.total_debt / data.operating_cash_flow
-
-        if ocf_td is not None and fcf_td is not None:
-            result.cf_debt_spread = ocf_td - fcf_td
-
-        if ocf_td is None:
-            result.cfd_score = 0.0
-            result.summary = "Cash Flow to Debt: Insufficient data for analysis."
-            return result
-
-        if ocf_td >= 0.50:
-            base = 10.0
-        elif ocf_td >= 0.40:
-            base = 8.5
-        elif ocf_td >= 0.30:
-            base = 7.0
-        elif ocf_td >= 0.20:
-            base = 5.5
-        elif ocf_td >= 0.10:
-            base = 4.0
-        elif ocf_td >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ocf_int is not None and ocf_int >= 3.0:
-            adj += 0.5
-        if data.operating_cash_flow is not None and data.operating_cash_flow > 0 and data.total_debt is not None and data.total_debt > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.cfd_score = round(score, 1)
-
-        if result.cfd_score >= 8:
-            result.cfd_grade = "Excellent"
-        elif result.cfd_score >= 6:
-            result.cfd_grade = "Good"
-        elif result.cfd_score >= 4:
-            result.cfd_grade = "Adequate"
-        else:
-            result.cfd_grade = "Weak"
-
-        dpb_str = f"{result.debt_payback_years:.1f}" if result.debt_payback_years is not None else "N/A"
-        result.summary = (
-            f"Cash Flow to Debt: OCF/TD={ocf_td:.4f}, "
-            f"Debt Payback={dpb_str} years. "
-            f"Score={result.cfd_score:.1f}/10 ({result.cfd_grade})."
+        """Phase 347: Cash Flow To Debt Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=CashFlowToDebtResult,
+            ratio_defs=[
+                ("ocf_to_td", "operating_cash_flow", "total_debt"),
+                ("ocf_to_interest", "operating_cash_flow", "interest_expense"),
+            ],
+            score_field="cfd_score",
+            grade_field="cfd_grade",
+            primary="ocf_to_td",
+            higher_is_better=True,
+            thresholds=[(0.50, 10.0), (0.40, 8.5), (0.30, 7.0), (0.20, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ocf_to_interest") is not None and r["ocf_to_interest"] >= 3.0, 0.5),
+                (lambda r, d: d.operating_cash_flow is not None and d.operating_cash_flow > 0 and d.total_debt is not None and d.total_debt > 0, 0.5),
+            ],
+            derived=[
+                ("cf_to_debt", lambda r, d: r.get("ocf_to_td")),
+                ("fcf_to_td", lambda r, d: (d.operating_cash_flow - (d.capex or 0)) / d.total_debt if d.operating_cash_flow is not None and d.capex is not None and d.total_debt is not None and d.total_debt != 0 else None),
+                ("debt_payback_years", lambda r, d: d.total_debt / d.operating_cash_flow if d.total_debt is not None and d.operating_cash_flow is not None and d.operating_cash_flow > 0 else None),
+                ("cf_debt_spread", lambda r, d: r["ocf_to_td"] - r["fcf_to_td"] if r.get("ocf_to_td") is not None and r.get("fcf_to_td") is not None else None),
+            ],
+            label="Cash Flow to Debt",
         )
-
         return result
 
     def net_worth_growth_analysis(self, data: FinancialData) -> NetWorthGrowthResult:
-        """Phase 346: Net Worth Growth Analysis.
-
-        Measures how well the company grows equity from internal earnings.
-        Primary metric: RE/TE — higher means more self-funded growth.
-        Supporting: Equity/Assets, NI/Equity (ROE proxy), plowback rate.
-
-        Scoring:
-            RE/TE >= 0.70 => base 10
-            RE/TE >= 0.60 => base 8.5
-            RE/TE >= 0.50 => base 7.0
-            RE/TE >= 0.40 => base 5.5
-            RE/TE >= 0.25 => base 4.0
-            RE/TE >= 0.10 => base 2.5
-            RE/TE < 0.10  => base 1.0
-        Adjustments:
-            Equity/Assets >= 0.40 => +0.5
-            Both RE and TE > 0 => +0.5
-        """
-        result = NetWorthGrowthResult()
-
-        re_te = safe_divide(data.retained_earnings, data.total_equity)
-        ea = safe_divide(data.total_equity, data.total_assets)
-        ni_eq = safe_divide(data.net_income, data.total_equity)
-
-        # Plowback = (NI - Dividends) / NI
-        plowback = None
-        if data.net_income is not None and data.net_income != 0:
-            div = data.dividends_paid or 0
-            plowback = (data.net_income - div) / data.net_income
-
-        result.re_to_equity = re_te
-        result.equity_to_assets = ea
-        result.ni_to_equity = ni_eq
-        result.plowback_rate = plowback
-        result.nw_growth_ratio = re_te
-
-        if re_te is not None and ea is not None:
-            result.nw_spread = re_te - ea
-
-        if re_te is None:
-            result.nwg_score = 0.0
-            result.summary = "Net Worth Growth: Insufficient data for analysis."
-            return result
-
-        if re_te >= 0.70:
-            base = 10.0
-        elif re_te >= 0.60:
-            base = 8.5
-        elif re_te >= 0.50:
-            base = 7.0
-        elif re_te >= 0.40:
-            base = 5.5
-        elif re_te >= 0.25:
-            base = 4.0
-        elif re_te >= 0.10:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ea is not None and ea >= 0.40:
-            adj += 0.5
-        if data.retained_earnings is not None and data.retained_earnings > 0 and data.total_equity is not None and data.total_equity > 0:
-            adj += 0.5
-
-        score = min(10.0, max(0.0, base + adj))
-        result.nwg_score = round(score, 1)
-
-        if result.nwg_score >= 8:
-            result.nwg_grade = "Excellent"
-        elif result.nwg_score >= 6:
-            result.nwg_grade = "Good"
-        elif result.nwg_score >= 4:
-            result.nwg_grade = "Adequate"
-        else:
-            result.nwg_grade = "Weak"
-
-        pb_str = f"{plowback:.4f}" if plowback is not None else "N/A"
-        result.summary = (
-            f"Net Worth Growth: RE/Equity={re_te:.4f}, Plowback Rate={pb_str}. "
-            f"Score={result.nwg_score:.1f}/10 ({result.nwg_grade})."
+        """Phase 346: Net Worth Growth Analysis."""
+        result = self._scored_analysis(
+            data=data,
+            result_class=NetWorthGrowthResult,
+            ratio_defs=[
+                ("re_to_equity", "retained_earnings", "total_equity"),
+                ("equity_to_assets", "total_equity", "total_assets"),
+                ("ni_to_equity", "net_income", "total_equity"),
+            ],
+            score_field="nwg_score",
+            grade_field="nwg_grade",
+            primary="re_to_equity",
+            higher_is_better=True,
+            thresholds=[(0.70, 10.0), (0.60, 8.5), (0.50, 7.0), (0.40, 5.5), (0.25, 4.0), (0.10, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("equity_to_assets") is not None and r["equity_to_assets"] >= 0.40, 0.5),
+                (lambda r, d: d.retained_earnings is not None and d.retained_earnings > 0 and d.total_equity is not None and d.total_equity > 0, 0.5),
+            ],
+            derived=[
+                ("plowback_rate", lambda r, d: (d.net_income - (d.dividends_paid or 0)) / d.net_income if d.net_income is not None and d.net_income != 0 else None),
+                ("nw_growth_ratio", lambda r, d: r.get("re_to_equity")),
+                ("nw_spread", lambda r, d: r["re_to_equity"] - r["equity_to_assets"] if r.get("re_to_equity") is not None and r.get("equity_to_assets") is not None else None),
+            ],
+            label="Net Worth Growth",
         )
-
         return result
 
     def asset_lightness_analysis(self, data: FinancialData) -> AssetLightnessResult:
@@ -9233,73 +8672,28 @@ class CharlieAnalyzer:
         return result
 
     def operating_expense_ratio_analysis(self, data: FinancialData) -> OperatingExpenseRatioResult:
-        """Phase 330: Operating Expense Ratio Analysis.
-
-        Primary: OpEx / Revenue.
-        Lower is better — efficient overhead management. <0.15 excellent, >0.40 weak.
-        """
-        result = OperatingExpenseRatioResult()
-        opex = getattr(data, 'operating_expenses', None) or 0.0
-        revenue = getattr(data, 'revenue', None) or 0.0
-        gp = getattr(data, 'gross_profit', None) or 0.0
-        ebitda = getattr(data, 'ebitda', None) or 0.0
-
-        if not revenue and not opex:
-            result.summary = "Operating Expense Ratio: Insufficient data."
-            return result
-
-        oer = safe_divide(opex, revenue)
-        result.opex_ratio = oer
-        result.opex_per_revenue = oer
-        result.opex_to_gross_profit = safe_divide(opex, gp) if gp else None
-        result.opex_to_ebitda = safe_divide(opex, ebitda) if ebitda else None
-        result.opex_coverage = safe_divide(revenue, opex) if opex else None
-        result.efficiency_gap = (oer - 0.20) if oer is not None else None
-
-        if oer is None:
-            result.summary = "Operating Expense Ratio: Cannot compute."
-            return result
-
-        # Scoring: lower OpEx/Revenue = more efficient
-        if oer <= 0.10:
-            base = 10.0
-        elif oer <= 0.15:
-            base = 8.5
-        elif oer <= 0.20:
-            base = 7.0
-        elif oer <= 0.25:
-            base = 5.5
-        elif oer <= 0.30:
-            base = 4.0
-        elif oer <= 0.40:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        opgp = result.opex_to_gross_profit
-        if opgp is not None and opgp < 1.0:
-            adj += 0.5
-        if opex > 0 and revenue > 0:
-            adj += 0.5
-
-        score = min(base + adj, 10.0)
-        result.oer_score = score
-        if score >= 8:
-            result.oer_grade = "Excellent"
-        elif score >= 6:
-            result.oer_grade = "Good"
-        elif score >= 4:
-            result.oer_grade = "Adequate"
-        else:
-            result.oer_grade = "Weak"
-
-        result.summary = (
-            f"Operating Expense Ratio: OpEx/Rev={f'{oer:.4f}' if oer is not None else 'N/A'}, "
-            f"OpEx/GP={f'{opgp:.4f}' if opgp is not None else 'N/A'}, "
-            f"Score={result.oer_score:.1f}/10 ({result.oer_grade})."
+        """Phase 330: Operating Expense Ratio Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=OperatingExpenseRatioResult,
+            ratio_defs=[
+                ("opex_ratio", "operating_expenses", "revenue"),
+                ("opex_to_gross_profit", "operating_expenses", "gross_profit"),
+                ("opex_to_ebitda", "operating_expenses", "ebitda"),
+            ],
+            score_field="oer_score", grade_field="oer_grade",
+            primary="opex_ratio", higher_is_better=False,
+            thresholds=[(0.10, 10.0), (0.15, 8.5), (0.20, 7.0), (0.25, 5.5), (0.30, 4.0), (0.40, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("opex_to_gross_profit") is not None and r["opex_to_gross_profit"] < 1.0, 0.5),
+                (lambda r, d: d.operating_expenses is not None and d.operating_expenses > 0 and d.revenue is not None and d.revenue > 0, 0.5),
+            ],
+            derived=[
+                ("opex_per_revenue", lambda r, d: r.get("opex_ratio")),
+                ("opex_coverage", lambda r, d: safe_divide(d.revenue, d.operating_expenses)),
+                ("efficiency_gap", lambda r, d: (r["opex_ratio"] - 0.20) if r.get("opex_ratio") is not None else None),
+            ],
+            label="Operating Expense Ratio",
         )
-        return result
 
     def noncurrent_asset_ratio_analysis(self, data: FinancialData) -> NoncurrentAssetRatioResult:
         """Phase 327: Noncurrent Asset Ratio Analysis.
@@ -9701,311 +9095,99 @@ class CharlieAnalyzer:
         return result
 
     def inventory_holding_cost_analysis(self, data: FinancialData) -> InventoryHoldingCostResult:
-        """Phase 294: Inventory Holding Cost Analysis.
-
-        Measures how much capital is tied up in inventory relative to
-        revenue, indicating inventory management efficiency and holding costs.
-        """
-        result = InventoryHoldingCostResult()
-
-        revenue = data.revenue
-        inventory = data.inventory
-        ca = data.current_assets
-        ta = data.total_assets
-        cogs = data.cogs
-
-        if not revenue or revenue <= 0:
-            return result
-        if inventory is None:
-            return result
-
-        # Primary: Inventory / Revenue (lower = better)
-        inv_to_rev = safe_divide(inventory, revenue)
-        result.inventory_to_revenue = inv_to_rev
-
-        # Secondary metrics
-        result.inventory_to_current_assets = safe_divide(inventory, ca)
-        result.inventory_to_total_assets = safe_divide(inventory, ta)
-        result.inventory_days = safe_divide(inventory, cogs) * 365 if cogs and cogs > 0 else None
-        result.inventory_carrying_cost = inv_to_rev
-        result.inventory_intensity = safe_divide(inventory, revenue)
-
-        if inv_to_rev is None:
-            return result
-
-        # Scoring: lower inventory/revenue = better efficiency
-        if inv_to_rev <= 0.05:
-            score = 10.0
-        elif inv_to_rev <= 0.08:
-            score = 8.5
-        elif inv_to_rev <= 0.12:
-            score = 7.0
-        elif inv_to_rev <= 0.18:
-            score = 5.5
-        elif inv_to_rev <= 0.25:
-            score = 4.0
-        elif inv_to_rev <= 0.35:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: Inventory/CA <= 0.30 (+0.5)
-        inv_ca = result.inventory_to_current_assets
-        if inv_ca is not None and inv_ca <= 0.30:
-            score += 0.5
-
-        # Adjustment: Inventory > 0 and Revenue > 0 (+0.5)
-        if inventory > 0 and revenue > 0:
-            score += 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.ihc_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.ihc_grade = grade
-
-        result.summary = (
-            f"Inventory Holding Cost: Inventory/Revenue={inv_to_rev:.2f}. "
-            f"Score={score:.1f}/10. "
-            f"Status: {grade}."
+        """Phase 294: Inventory Holding Cost Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=InventoryHoldingCostResult,
+            ratio_defs=[
+                ("inventory_to_revenue", "inventory", "revenue"),
+                ("inventory_to_current_assets", "inventory", "current_assets"),
+                ("inventory_to_total_assets", "inventory", "total_assets"),
+            ],
+            score_field="ihc_score", grade_field="ihc_grade",
+            primary="inventory_to_revenue", higher_is_better=False,
+            thresholds=[(0.05, 10.0), (0.08, 8.5), (0.12, 7.0), (0.18, 5.5), (0.25, 4.0), (0.35, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("inventory_to_current_assets") is not None and r["inventory_to_current_assets"] <= 0.30, 0.5),
+                (lambda r, d: d.inventory is not None and d.inventory > 0 and d.revenue is not None and d.revenue > 0, 0.5),
+            ],
+            derived=[
+                ("inventory_days", lambda r, d: safe_divide(d.inventory, d.cogs) * 365 if d.cogs and d.cogs > 0 and d.inventory is not None else None),
+                ("inventory_carrying_cost", lambda r, d: r.get("inventory_to_revenue")),
+                ("inventory_intensity", lambda r, d: r.get("inventory_to_revenue")),
+            ],
+            label="Inventory Holding Cost",
         )
-
-        return result
 
     def funding_mix_balance_analysis(self, data: FinancialData) -> FundingMixBalanceResult:
-        """Phase 293: Funding Mix Balance Analysis.
-
-        Evaluates the balance between debt and equity in the company's
-        capital structure, indicating financial stability and risk level.
-        """
-        result = FundingMixBalanceResult()
-
-        equity = data.total_equity
-        debt = data.total_debt
-
-        if equity is None or equity <= 0:
-            return result
-
-        total_capital = equity + (debt or 0)
-        if total_capital <= 0:
-            return result
-
-        # Primary: Equity / Total Capital (higher = more equity-funded)
-        eq_to_cap = safe_divide(equity, total_capital)
-        result.equity_to_total_capital = eq_to_cap
-
-        # Secondary metrics
-        result.debt_to_equity = safe_divide(debt, equity)
-        result.debt_to_total_capital = safe_divide(debt, total_capital)
-        result.equity_multiplier = safe_divide(total_capital, equity)
-        result.leverage_headroom = 1.0 - (result.debt_to_total_capital or 0)
-        result.funding_stability = eq_to_cap
-
-        if eq_to_cap is None:
-            return result
-
-        # Scoring: higher equity proportion = better balance
-        if eq_to_cap >= 0.80:
-            score = 10.0
-        elif eq_to_cap >= 0.70:
-            score = 8.5
-        elif eq_to_cap >= 0.60:
-            score = 7.0
-        elif eq_to_cap >= 0.50:
-            score = 5.5
-        elif eq_to_cap >= 0.40:
-            score = 4.0
-        elif eq_to_cap >= 0.30:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: D/E <= 0.50 (+0.5)
-        de_ratio = result.debt_to_equity
-        if de_ratio is not None and de_ratio <= 0.50:
-            score += 0.5
-
-        # Adjustment: Equity > 0 and Debt >= 0 (+0.5)
-        if equity > 0 and debt is not None and debt >= 0:
-            score += 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.fmb_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.fmb_grade = grade
-
-        result.summary = (
-            f"Funding Mix Balance: Equity/TotalCapital={eq_to_cap:.2f}. "
-            f"Score={score:.1f}/10. "
-            f"Status: {grade}."
+        """Phase 293: Funding Mix Balance Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=FundingMixBalanceResult,
+            ratio_defs=[
+                ("debt_to_equity", "total_debt", "total_equity"),
+            ],
+            score_field="fmb_score", grade_field="fmb_grade",
+            primary="equity_to_total_capital", higher_is_better=True,
+            thresholds=[(0.80, 10.0), (0.70, 8.5), (0.60, 7.0), (0.50, 5.5), (0.40, 4.0), (0.30, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_to_equity") is not None and r["debt_to_equity"] <= 0.50, 0.5),
+                (lambda r, d: d.total_equity is not None and d.total_equity > 0 and d.total_debt is not None and d.total_debt >= 0, 0.5),
+            ],
+            derived=[
+                ("equity_to_total_capital", lambda r, d: safe_divide(d.total_equity, (d.total_equity or 0) + (d.total_debt or 0)) if d.total_equity and d.total_equity > 0 and ((d.total_equity or 0) + (d.total_debt or 0)) > 0 else None),
+                ("debt_to_total_capital", lambda r, d: safe_divide(d.total_debt, (d.total_equity or 0) + (d.total_debt or 0)) if d.total_equity and ((d.total_equity or 0) + (d.total_debt or 0)) > 0 else None),
+                ("equity_multiplier", lambda r, d: safe_divide((d.total_equity or 0) + (d.total_debt or 0), d.total_equity) if d.total_equity and d.total_equity > 0 else None),
+                ("leverage_headroom", lambda r, d: 1.0 - (r.get("debt_to_total_capital") or 0)),
+                ("funding_stability", lambda r, d: r.get("equity_to_total_capital")),
+            ],
+            label="Funding Mix Balance",
         )
-
-        return result
 
     def expense_ratio_discipline_analysis(self, data: FinancialData) -> ExpenseRatioDisciplineResult:
-        """Phase 292: Expense Ratio Discipline Analysis.
-
-        Measures how well the company controls operating expenses relative
-        to revenue, indicating cost management discipline and efficiency.
-        """
-        result = ExpenseRatioDisciplineResult()
-
-        revenue = data.revenue
-        opex = data.operating_expenses
-        cogs = data.cogs
-        oi = data.operating_income
-
-        if not revenue or revenue <= 0:
-            return result
-
-        # Primary: OpEx / Revenue (lower = better)
-        opex_to_rev = safe_divide(opex, revenue)
-        result.opex_to_revenue = opex_to_rev
-
-        # Secondary metrics
-        result.cogs_to_revenue = safe_divide(cogs, revenue)
-        result.total_expense_ratio = safe_divide(
-            (opex or 0) + (cogs or 0), revenue
+        """Phase 292: Expense Ratio Discipline Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=ExpenseRatioDisciplineResult,
+            ratio_defs=[
+                ("opex_to_revenue", "operating_expenses", "revenue"),
+                ("cogs_to_revenue", "cogs", "revenue"),
+                ("operating_margin", "operating_income", "revenue"),
+            ],
+            score_field="erd_score", grade_field="erd_grade",
+            primary="opex_to_revenue", higher_is_better=False,
+            thresholds=[(0.30, 10.0), (0.40, 8.5), (0.50, 7.0), (0.60, 5.5), (0.70, 4.0), (0.80, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("cogs_to_revenue") is not None and r["cogs_to_revenue"] <= 0.60, 0.5),
+                (lambda r, d: d.operating_income is not None and d.operating_income > 0, 0.5),
+            ],
+            derived=[
+                ("total_expense_ratio", lambda r, d: safe_divide((d.operating_expenses or 0) + (d.cogs or 0), d.revenue) if d.revenue else None),
+                ("expense_efficiency", lambda r, d: safe_divide(d.revenue, (d.operating_expenses or 0) + (d.cogs or 0)) if ((d.operating_expenses or 0) + (d.cogs or 0)) > 0 else None),
+            ],
+            label="Expense Ratio Discipline",
         )
-        result.operating_margin = safe_divide(oi, revenue)
-        result.expense_efficiency = safe_divide(revenue, (opex or 0) + (cogs or 0)) if ((opex or 0) + (cogs or 0)) > 0 else None
-
-        if opex_to_rev is None:
-            return result
-
-        # Scoring: lower OpEx/Revenue = better discipline
-        if opex_to_rev <= 0.30:
-            score = 10.0
-        elif opex_to_rev <= 0.40:
-            score = 8.5
-        elif opex_to_rev <= 0.50:
-            score = 7.0
-        elif opex_to_rev <= 0.60:
-            score = 5.5
-        elif opex_to_rev <= 0.70:
-            score = 4.0
-        elif opex_to_rev <= 0.80:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: COGS/Revenue <= 0.60 (+0.5)
-        cogs_ratio = result.cogs_to_revenue
-        if cogs_ratio is not None and cogs_ratio <= 0.60:
-            score += 0.5
-
-        # Adjustment: Positive operating income (+0.5)
-        if oi is not None and oi > 0:
-            score += 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.erd_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.erd_grade = grade
-
-        result.summary = (
-            f"Expense Ratio Discipline: OpEx/Revenue={opex_to_rev:.2f}. "
-            f"Score={score:.1f}/10. "
-            f"Status: {grade}."
-        )
-
-        return result
 
     def revenue_cash_realization_analysis(self, data: FinancialData) -> RevenueCashRealizationResult:
-        """Phase 291: Revenue Cash Realization Analysis.
-
-        Measures how effectively reported revenue converts to actual
-        cash collected, indicating revenue quality and collection efficiency.
-        """
-        result = RevenueCashRealizationResult()
-
-        revenue = getattr(data, 'revenue', None) or 0
-        ocf = getattr(data, 'operating_cash_flow', None) or 0
-        ar = getattr(data, 'accounts_receivable', None) or 0
-
-        if not revenue or revenue <= 0:
-            return result
-
-        # Core metrics
-        result.ocf_to_revenue = safe_divide(ocf, revenue)
-        cash_collected = revenue - ar  # simplified approximation
-        result.cash_to_revenue = safe_divide(cash_collected, revenue) if cash_collected else None
-        result.collection_rate = safe_divide(revenue - ar, revenue) if ar is not None else None
-        result.revenue_cash_gap = revenue - ocf
-        result.cash_conversion_speed = safe_divide(ocf, revenue)
-        result.revenue_quality_ratio = safe_divide(ocf, revenue)
-
-        # Scoring: OCF/Revenue primary — higher = better cash realization
-        ocf_rev = result.ocf_to_revenue or 0
-        if ocf_rev >= 0.30:
-            base = 10.0
-        elif ocf_rev >= 0.22:
-            base = 8.5
-        elif ocf_rev >= 0.15:
-            base = 7.0
-        elif ocf_rev >= 0.10:
-            base = 5.5
-        elif ocf_rev >= 0.05:
-            base = 4.0
-        elif ocf_rev >= 0.02:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Bonus: collection rate >= 85%
-        if result.collection_rate is not None and result.collection_rate >= 0.85:
-            adj += 0.5
-        # Bonus: OCF > 0 and revenue > 0
-        if ocf > 0 and revenue > 0:
-            adj += 0.5
-
-        result.rcr_score = min(10.0, max(0.0, base + adj))
-
-        if result.rcr_score >= 8:
-            result.rcr_grade = "Excellent"
-        elif result.rcr_score >= 6:
-            result.rcr_grade = "Good"
-        elif result.rcr_score >= 4:
-            result.rcr_grade = "Adequate"
-        else:
-            result.rcr_grade = "Weak"
-
-        result.summary = (
-            f"Revenue Cash Realization: {result.rcr_grade} "
-            f"(Score: {result.rcr_score:.1f}/10). "
-            f"OCF/Revenue={ocf_rev:.1%}, "
-            f"Collection Rate={result.collection_rate:.1%}."
-            if result.collection_rate is not None
-            else f"Revenue Cash Realization: {result.rcr_grade} "
-            f"(Score: {result.rcr_score:.1f}/10). "
-            f"OCF/Revenue={ocf_rev:.1%}."
+        """Phase 291: Revenue Cash Realization Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=RevenueCashRealizationResult,
+            ratio_defs=[
+                ("ocf_to_revenue", "operating_cash_flow", "revenue"),
+            ],
+            score_field="rcr_score", grade_field="rcr_grade",
+            primary="ocf_to_revenue", higher_is_better=True,
+            thresholds=[(0.30, 10.0), (0.22, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("collection_rate") is not None and r["collection_rate"] >= 0.85, 0.5),
+                (lambda r, d: d.operating_cash_flow is not None and d.operating_cash_flow > 0 and d.revenue is not None and d.revenue > 0, 0.5),
+            ],
+            derived=[
+                ("collection_rate", lambda r, d: safe_divide((d.revenue or 0) - (d.accounts_receivable or 0), d.revenue) if d.revenue and d.revenue > 0 else None),
+                ("cash_to_revenue", lambda r, d: safe_divide((d.revenue or 0) - (d.accounts_receivable or 0), d.revenue) if d.revenue and d.revenue > 0 and ((d.revenue or 0) - (d.accounts_receivable or 0)) else None),
+                ("revenue_cash_gap", lambda r, d: (d.revenue or 0) - (d.operating_cash_flow or 0) if d.revenue else None),
+                ("cash_conversion_speed", lambda r, d: r.get("ocf_to_revenue")),
+                ("revenue_quality_ratio", lambda r, d: r.get("ocf_to_revenue")),
+            ],
+            label="Revenue Cash Realization",
         )
-
-        return result
 
     def net_debt_position_analysis(self, data: FinancialData) -> NetDebtPositionResult:
         """Phase 286: Net Debt Position Analysis.
@@ -10090,440 +9272,122 @@ class CharlieAnalyzer:
         return result
 
     def liability_coverage_strength_analysis(self, data: FinancialData) -> LiabilityCoverageStrengthResult:
-        """Phase 281: Liability Coverage Strength Analysis.
-
-        Measures ability to cover total liabilities from operations.
-        Primary metric: OCF / Total Liabilities (higher = stronger).
-
-        Scoring (base from ocf_to_liabilities):
-            >= 0.50 => 10  (can pay off liabilities in ~2 years)
-            >= 0.35 => 8.5
-            >= 0.25 => 7.0
-            >= 0.15 => 5.5
-            >= 0.10 => 4.0
-            >= 0.05 => 2.5
-            <  0.05 => 1.0
-
-        Adjustments:
-            assets_to_liabilities >= 2.0 (asset-backed)   => +0.5
-            OCF > 0 and TL > 0 (data present)             => +0.5
-        """
-        result = LiabilityCoverageStrengthResult()
-
-        ocf = getattr(data, 'operating_cash_flow', None) or 0
-        tl = getattr(data, 'total_liabilities', None) or 0
-        ta = getattr(data, 'total_assets', None) or 0
-        te = getattr(data, 'total_equity', None) or 0
-        ebitda = getattr(data, 'ebitda', None) or 0
-        revenue = getattr(data, 'revenue', None) or 0
-
-        if not ocf or ocf <= 0 or not tl or tl <= 0:
-            result.summary = "Liability Coverage Strength: Insufficient data (need positive OCF and total liabilities)."
-            return result
-
-        # Core ratios
-        result.ocf_to_liabilities = safe_divide(ocf, tl)
-        result.ebitda_to_liabilities = safe_divide(ebitda, tl) if ebitda else None
-        result.assets_to_liabilities = safe_divide(ta, tl) if ta and ta > 0 else None
-        result.equity_to_liabilities = safe_divide(te, tl) if te else None
-        result.liability_to_revenue = safe_divide(tl, revenue) if revenue and revenue > 0 else None
-        result.liability_burden = safe_divide(tl, ta) if ta and ta > 0 else None
-
-        # Scoring
-        otl = result.ocf_to_liabilities
-        if otl is None:
-            result.summary = "Liability Coverage Strength: Could not compute ratio."
-            return result
-
-        if otl >= 0.50:
-            base = 10.0
-        elif otl >= 0.35:
-            base = 8.5
-        elif otl >= 0.25:
-            base = 7.0
-        elif otl >= 0.15:
-            base = 5.5
-        elif otl >= 0.10:
-            base = 4.0
-        elif otl >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if result.assets_to_liabilities is not None and result.assets_to_liabilities >= 2.0:
-            adj += 0.5
-        if ocf > 0 and tl > 0:
-            adj += 0.5
-
-        result.lcs_score = min(10.0, max(0.0, base + adj))
-
-        if result.lcs_score >= 8:
-            result.lcs_grade = "Excellent"
-        elif result.lcs_score >= 6:
-            result.lcs_grade = "Good"
-        elif result.lcs_score >= 4:
-            result.lcs_grade = "Adequate"
-        else:
-            result.lcs_grade = "Weak"
-
-        result.summary = (
-            f"Liability Coverage Strength: OCF/TL={otl:.2%}, "
-            f"Score={result.lcs_score:.1f}/10 ({result.lcs_grade})."
+        """Phase 281: Liability Coverage Strength Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=LiabilityCoverageStrengthResult,
+            ratio_defs=[
+                ("ocf_to_liabilities", "operating_cash_flow", "total_liabilities"),
+                ("ebitda_to_liabilities", "ebitda", "total_liabilities"),
+                ("assets_to_liabilities", "total_assets", "total_liabilities"),
+                ("equity_to_liabilities", "total_equity", "total_liabilities"),
+                ("liability_to_revenue", "total_liabilities", "revenue"),
+                ("liability_burden", "total_liabilities", "total_assets"),
+            ],
+            score_field="lcs_score", grade_field="lcs_grade",
+            primary="ocf_to_liabilities", higher_is_better=True,
+            thresholds=[(0.50, 10.0), (0.35, 8.5), (0.25, 7.0), (0.15, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("assets_to_liabilities") is not None and r["assets_to_liabilities"] >= 2.0, 0.5),
+                (lambda r, d: d.operating_cash_flow is not None and d.operating_cash_flow > 0 and d.total_liabilities is not None and d.total_liabilities > 0, 0.5),
+            ],
+            label="Liability Coverage Strength",
         )
-
-        return result
 
     def capital_adequacy_analysis(self, data: FinancialData) -> CapitalAdequacyResult:
-        """Phase 279: Capital Adequacy Analysis.
-
-        Measures whether equity base is sufficient relative to risk profile.
-        Primary metric: Equity / Total Assets (equity ratio, higher = more adequate).
-
-        Scoring (base from equity_ratio):
-            >= 0.60 => 10  (fortress balance sheet)
-            >= 0.50 => 8.5
-            >= 0.40 => 7.0
-            >= 0.30 => 5.5
-            >= 0.20 => 4.0
-            >= 0.10 => 2.5
-            <  0.10 => 1.0
-
-        Adjustments:
-            retained_to_equity >= 0.50 (quality equity)     => +0.5
-            equity > 0 and total_assets > 0 (data present)  => +0.5
-        """
-        result = CapitalAdequacyResult()
-
-        equity = getattr(data, 'total_equity', None) or 0
-        ta = getattr(data, 'total_assets', None) or 0
-        tl = getattr(data, 'total_liabilities', None) or 0
-        td = getattr(data, 'total_debt', None) or 0
-        re = getattr(data, 'retained_earnings', None) or 0
-
-        if not equity or equity <= 0 or not ta or ta <= 0:
-            result.summary = "Capital Adequacy: Insufficient data (need positive equity and total assets)."
-            return result
-
-        # Core ratios
-        result.equity_ratio = safe_divide(equity, ta)
-        result.equity_to_debt = safe_divide(equity, td) if td and td > 0 else None
-        result.retained_to_equity = safe_divide(re, equity) if re else None
-        result.equity_to_liabilities = safe_divide(equity, tl) if tl and tl > 0 else None
-        result.tangible_equity_ratio = safe_divide(equity, ta)  # Simplified (no intangibles tracked)
-        result.capital_buffer = safe_divide(equity - tl, ta) if tl else None
-
-        # Scoring
-        er = result.equity_ratio
-        if er is None:
-            result.summary = "Capital Adequacy: Could not compute equity ratio."
-            return result
-
-        if er >= 0.60:
-            base = 10.0
-        elif er >= 0.50:
-            base = 8.5
-        elif er >= 0.40:
-            base = 7.0
-        elif er >= 0.30:
-            base = 5.5
-        elif er >= 0.20:
-            base = 4.0
-        elif er >= 0.10:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        rte = result.retained_to_equity
-        if rte is not None and rte >= 0.50:
-            adj += 0.5
-        if equity > 0 and ta > 0:
-            adj += 0.5
-
-        result.caq_score = min(10.0, max(0.0, base + adj))
-
-        if result.caq_score >= 8:
-            result.caq_grade = "Excellent"
-        elif result.caq_score >= 6:
-            result.caq_grade = "Good"
-        elif result.caq_score >= 4:
-            result.caq_grade = "Adequate"
-        else:
-            result.caq_grade = "Weak"
-
-        result.summary = (
-            f"Capital Adequacy: Equity Ratio={er:.2%}, "
-            f"Score={result.caq_score:.1f}/10 ({result.caq_grade})."
+        """Phase 279: Capital Adequacy Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=CapitalAdequacyResult,
+            ratio_defs=[
+                ("equity_ratio", "total_equity", "total_assets"),
+                ("equity_to_debt", "total_equity", "total_debt"),
+                ("retained_to_equity", "retained_earnings", "total_equity"),
+                ("equity_to_liabilities", "total_equity", "total_liabilities"),
+                ("tangible_equity_ratio", "total_equity", "total_assets"),
+            ],
+            score_field="caq_score", grade_field="caq_grade",
+            primary="equity_ratio", higher_is_better=True,
+            thresholds=[(0.60, 10.0), (0.50, 8.5), (0.40, 7.0), (0.30, 5.5), (0.20, 4.0), (0.10, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("retained_to_equity") is not None and r["retained_to_equity"] >= 0.50, 0.5),
+                (lambda r, d: d.total_equity is not None and d.total_equity > 0 and d.total_assets is not None and d.total_assets > 0, 0.5),
+            ],
+            derived=[
+                ("capital_buffer", lambda r, d: safe_divide((d.total_equity or 0) - (d.total_liabilities or 0), d.total_assets) if d.total_liabilities is not None and d.total_assets is not None and d.total_assets > 0 else None),
+            ],
+            label="Capital Adequacy",
         )
-
-        return result
 
     def operating_income_quality_analysis(self, data: FinancialData) -> OperatingIncomeQualityResult:
-        """Phase 275: Operating Income Quality Analysis.
-
-        Measures the quality and sustainability of operating income.
-        Primary metric: OI / Revenue (operating margin, higher = better).
-
-        Scoring (base from oi_to_revenue):
-            >= 0.30 => 10  (strong operating margin)
-            >= 0.20 => 8.5
-            >= 0.15 => 7.0
-            >= 0.10 => 5.5
-            >= 0.05 => 4.0
-            >= 0.02 => 2.5
-            <  0.02 => 1.0
-
-        Adjustments:
-            OCF > OI (cash-backed)   => +0.5
-            OI > 0 and Revenue > 0   => +0.5
-        """
-        result = OperatingIncomeQualityResult()
-
-        oi = getattr(data, 'operating_income', None) or 0
-        revenue = getattr(data, 'revenue', None) or 0
-        ebitda = getattr(data, 'ebitda', None) or 0
-        ocf = getattr(data, 'operating_cash_flow', None) or 0
-        total_assets = getattr(data, 'total_assets', None) or 0
-
-        if not oi or oi <= 0 or not revenue or revenue <= 0:
-            result.summary = "Operating Income Quality: Insufficient data (need positive OI and revenue)."
-            return result
-
-        # Core ratios
-        result.oi_to_revenue = safe_divide(oi, revenue)
-        result.oi_to_ebitda = safe_divide(oi, ebitda) if ebitda and ebitda > 0 else None
-        result.oi_to_ocf = safe_divide(oi, ocf) if ocf and ocf > 0 else None
-        result.oi_to_total_assets = safe_divide(oi, total_assets) if total_assets and total_assets > 0 else None
-        result.operating_spread = safe_divide(oi, revenue)  # same as margin
-        result.oi_cash_backing = safe_divide(ocf, oi) if ocf else None
-
-        # Scoring
-        oi_margin = result.oi_to_revenue
-        if oi_margin is None:
-            result.summary = "Operating Income Quality: Could not compute margin."
-            return result
-
-        if oi_margin >= 0.30:
-            base = 10.0
-        elif oi_margin >= 0.20:
-            base = 8.5
-        elif oi_margin >= 0.15:
-            base = 7.0
-        elif oi_margin >= 0.10:
-            base = 5.5
-        elif oi_margin >= 0.05:
-            base = 4.0
-        elif oi_margin >= 0.02:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if ocf > 0 and ocf > oi:
-            adj += 0.5
-        if oi > 0 and revenue > 0:
-            adj += 0.5
-
-        result.oiq_score = min(10.0, max(0.0, base + adj))
-
-        if result.oiq_score >= 8:
-            result.oiq_grade = "Excellent"
-        elif result.oiq_score >= 6:
-            result.oiq_grade = "Good"
-        elif result.oiq_score >= 4:
-            result.oiq_grade = "Adequate"
-        else:
-            result.oiq_grade = "Weak"
-
-        result.summary = (
-            f"Operating Income Quality: OI Margin={oi_margin:.2%}, "
-            f"Score={result.oiq_score:.1f}/10, Grade={result.oiq_grade}. "
-            f"{'Strong' if oi_margin >= 0.20 else 'Moderate' if oi_margin >= 0.10 else 'Thin'} "
-            f"operating profitability from core business."
+        """Phase 275: Operating Income Quality Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=OperatingIncomeQualityResult,
+            ratio_defs=[
+                ("oi_to_revenue", "operating_income", "revenue"),
+                ("oi_to_ebitda", "operating_income", "ebitda"),
+                ("oi_to_ocf", "operating_income", "operating_cash_flow"),
+                ("oi_to_total_assets", "operating_income", "total_assets"),
+            ],
+            score_field="oiq_score", grade_field="oiq_grade",
+            primary="oi_to_revenue", higher_is_better=True,
+            thresholds=[(0.30, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: d.operating_cash_flow is not None and d.operating_cash_flow > 0 and d.operating_income is not None and d.operating_cash_flow > d.operating_income, 0.5),
+                (lambda r, d: d.operating_income is not None and d.operating_income > 0 and d.revenue is not None and d.revenue > 0, 0.5),
+            ],
+            derived=[
+                ("operating_spread", lambda r, d: r.get("oi_to_revenue")),
+                ("oi_cash_backing", lambda r, d: safe_divide(d.operating_cash_flow, d.operating_income) if d.operating_cash_flow else None),
+            ],
+            label="Operating Income Quality",
         )
-
-        return result
 
     def ebitda_to_debt_coverage_analysis(self, data: FinancialData) -> EbitdaToDebtCoverageResult:
-        """Phase 274: EBITDA-to-Debt Coverage Analysis.
-
-        Measures how well EBITDA covers total debt obligations.
-        Primary metric: EBITDA / Total Debt (higher = better coverage).
-
-        Scoring (base from ebitda_to_debt):
-            >= 1.0  => 10  (can repay all debt from 1 year EBITDA)
-            >= 0.60 => 8.5
-            >= 0.40 => 7.0
-            >= 0.25 => 5.5
-            >= 0.15 => 4.0
-            >= 0.08 => 2.5
-            <  0.08 => 1.0
-
-        Adjustments:
-            ebitda_to_interest >= 3.0 => +0.5
-            NI > 0 and EBITDA > 0    => +0.5
-        """
-        result = EbitdaToDebtCoverageResult()
-
-        ebitda = getattr(data, 'ebitda', None) or 0
-        total_debt = getattr(data, 'total_debt', None) or 0
-        interest_expense = getattr(data, 'interest_expense', None) or 0
-        total_liabilities = getattr(data, 'total_liabilities', None) or 0
-        net_income = getattr(data, 'net_income', None) or 0
-
-        if not ebitda or ebitda <= 0 or not total_debt or total_debt <= 0:
-            result.summary = "EBITDA-to-Debt Coverage: Insufficient data (need positive EBITDA and total debt)."
-            return result
-
-        # Core ratios
-        result.ebitda_to_debt = safe_divide(ebitda, total_debt)
-        result.ebitda_to_interest = safe_divide(ebitda, interest_expense) if interest_expense and interest_expense > 0 else None
-        result.debt_to_ebitda = safe_divide(total_debt, ebitda)
-        result.ebitda_to_total_liabilities = safe_divide(ebitda, total_liabilities) if total_liabilities and total_liabilities > 0 else None
-        result.debt_service_buffer = safe_divide(ebitda - interest_expense, total_debt) if interest_expense else result.ebitda_to_debt
-        result.leverage_headroom = safe_divide(ebitda, total_debt) if total_debt else None
-
-        # Scoring
-        etd = result.ebitda_to_debt
-        if etd is None:
-            result.summary = "EBITDA-to-Debt Coverage: Could not compute ratio."
-            return result
-
-        if etd >= 1.0:
-            base = 10.0
-        elif etd >= 0.60:
-            base = 8.5
-        elif etd >= 0.40:
-            base = 7.0
-        elif etd >= 0.25:
-            base = 5.5
-        elif etd >= 0.15:
-            base = 4.0
-        elif etd >= 0.08:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        if result.ebitda_to_interest is not None and result.ebitda_to_interest >= 3.0:
-            adj += 0.5
-        if net_income > 0 and ebitda > 0:
-            adj += 0.5
-
-        result.etdc_score = min(10.0, max(0.0, base + adj))
-
-        if result.etdc_score >= 8:
-            result.etdc_grade = "Excellent"
-        elif result.etdc_score >= 6:
-            result.etdc_grade = "Good"
-        elif result.etdc_score >= 4:
-            result.etdc_grade = "Adequate"
-        else:
-            result.etdc_grade = "Weak"
-
-        result.summary = (
-            f"EBITDA-to-Debt Coverage: EBITDA/Debt={etd:.2f}, "
-            f"Score={result.etdc_score:.1f}/10, Grade={result.etdc_grade}. "
-            f"{'Strong' if etd >= 0.60 else 'Moderate' if etd >= 0.25 else 'Limited'} "
-            f"debt repayment capacity from operating earnings."
+        """Phase 274: EBITDA-to-Debt Coverage Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=EbitdaToDebtCoverageResult,
+            ratio_defs=[
+                ("ebitda_to_debt", "ebitda", "total_debt"),
+                ("ebitda_to_interest", "ebitda", "interest_expense"),
+                ("debt_to_ebitda", "total_debt", "ebitda"),
+                ("ebitda_to_total_liabilities", "ebitda", "total_liabilities"),
+            ],
+            score_field="etdc_score", grade_field="etdc_grade",
+            primary="ebitda_to_debt", higher_is_better=True,
+            thresholds=[(1.0, 10.0), (0.60, 8.5), (0.40, 7.0), (0.25, 5.5), (0.15, 4.0), (0.08, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ebitda_to_interest") is not None and r["ebitda_to_interest"] >= 3.0, 0.5),
+                (lambda r, d: d.net_income is not None and d.net_income > 0 and d.ebitda is not None and d.ebitda > 0, 0.5),
+            ],
+            derived=[
+                ("debt_service_buffer", lambda r, d: safe_divide((d.ebitda or 0) - (d.interest_expense or 0), d.total_debt) if d.interest_expense else r.get("ebitda_to_debt")),
+                ("leverage_headroom", lambda r, d: r.get("ebitda_to_debt")),
+            ],
+            label="EBITDA-to-Debt Coverage",
         )
-
-        return result
 
     def debt_quality_analysis(self, data: FinancialData) -> DebtQualityResult:
-        """Phase 267: Debt Quality Assessment.
-
-        Evaluates the quality and sustainability of a company's debt structure.
-        Debt-to-Equity is the primary metric. Lower = less leveraged = higher quality.
-
-        Scoring (D/E, lower = better):
-            <=0.20 → 10 (minimal debt)
-            <=0.50 → 8.5
-            <=1.00 → 7.0
-            <=1.50 → 5.5
-            <=2.00 → 4.0
-            <=3.00 → 2.5
-            >3.00  → 1.0 (highly leveraged)
-        Adjustments:
-            +0.5 if interest_coverage >= 5.0 (strong coverage)
-            +0.5 if debt_to_ebitda <= 3.0 (manageable debt load)
-        """
-        result = DebtQualityResult()
-
-        td = getattr(data, 'total_debt', None)
-        te = getattr(data, 'total_equity', None)
-        ta = getattr(data, 'total_assets', None)
-
-        if td is None or te is None or te <= 0:
-            result.summary = "Debt Quality: Insufficient data."
-            return result
-
-        result.debt_to_equity = safe_divide(td, te)
-
-        if ta and ta > 0:
-            result.debt_to_assets = safe_divide(td, ta)
-
-        tl = getattr(data, 'total_liabilities', None)
-        if tl and tl > 0 and td > 0:
-            result.long_term_debt_ratio = safe_divide(td, tl)
-
-        ebitda = getattr(data, 'ebitda', None)
-        if ebitda and ebitda > 0:
-            result.debt_to_ebitda = safe_divide(td, ebitda)
-
-        ie = getattr(data, 'interest_expense', None)
-        ebit = getattr(data, 'ebit', None)
-        if ie and ie > 0 and ebit is not None:
-            result.interest_coverage = safe_divide(ebit, ie)
-
-        if ie and ie > 0 and td > 0:
-            result.debt_cost = safe_divide(ie, td)
-
-        # Scoring
-        de = result.debt_to_equity
-        if de is None:
-            result.summary = "Debt Quality: Could not compute ratio."
-            return result
-
-        if de <= 0.20:
-            score = 10.0
-        elif de <= 0.50:
-            score = 8.5
-        elif de <= 1.00:
-            score = 7.0
-        elif de <= 1.50:
-            score = 5.5
-        elif de <= 2.00:
-            score = 4.0
-        elif de <= 3.00:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustments
-        if result.interest_coverage is not None and result.interest_coverage >= 5.0:
-            score += 0.5
-        if result.debt_to_ebitda is not None and result.debt_to_ebitda <= 3.0:
-            score += 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.dq_score = score
-        if score >= 8:
-            result.dq_grade = "Excellent"
-        elif score >= 6:
-            result.dq_grade = "Good"
-        elif score >= 4:
-            result.dq_grade = "Adequate"
-        else:
-            result.dq_grade = "Weak"
-
-        result.summary = (
-            f"Debt Quality: D/E={de:.2f}, "
-            f"score={score:.1f}/10, grade={result.dq_grade}."
+        """Phase 267: Debt Quality Assessment."""
+        return self._scored_analysis(
+            data=data, result_class=DebtQualityResult,
+            ratio_defs=[
+                ("debt_to_equity", "total_debt", "total_equity"),
+                ("debt_to_assets", "total_debt", "total_assets"),
+                ("long_term_debt_ratio", "total_debt", "total_liabilities"),
+                ("debt_to_ebitda", "total_debt", "ebitda"),
+            ],
+            score_field="dq_score", grade_field="dq_grade",
+            primary="debt_to_equity", higher_is_better=False,
+            thresholds=[(0.20, 10.0), (0.50, 8.5), (1.00, 7.0), (1.50, 5.5), (2.00, 4.0), (3.00, 2.5)],
+            adjustments=[
+                (lambda r, d: safe_divide(d.ebit, d.interest_expense) is not None and safe_divide(d.ebit, d.interest_expense) >= 5.0, 0.5),
+                (lambda r, d: r.get("debt_to_ebitda") is not None and r["debt_to_ebitda"] <= 3.0, 0.5),
+            ],
+            derived=[
+                ("interest_coverage", lambda r, d: safe_divide(d.ebit, d.interest_expense)),
+                ("debt_cost", lambda r, d: safe_divide(d.interest_expense, d.total_debt)),
+            ],
+            label="Debt Quality",
         )
-
-        return result
 
     def fixed_asset_productivity_analysis(self, data: FinancialData) -> FixedAssetProductivityResult:
         """Phase 263: Fixed Asset Productivity Analysis.
@@ -10615,82 +9479,28 @@ class CharlieAnalyzer:
         return result
 
     def depreciation_burden_analysis(self, data: FinancialData) -> DepreciationBurdenResult:
-        """Phase 259: Depreciation Burden Analysis.
-
-        Measures how heavily depreciation weighs on earnings.
-        Lower dep_to_revenue = lighter burden = more asset-light.
-        """
-        result = DepreciationBurdenResult()
-
-        rev = getattr(data, 'revenue', None)
-        dep = getattr(data, 'depreciation', None)
-        ta = getattr(data, 'total_assets', None)
-        ebitda = getattr(data, 'ebitda', None)
-        ebit = getattr(data, 'ebit', None)
-        gp = getattr(data, 'gross_profit', None)
-
-        if not rev or not dep or rev <= 0 or dep <= 0:
-            return result
-
-        result.dep_to_revenue = safe_divide(dep, rev)
-        if ta and ta > 0:
-            result.dep_to_assets = safe_divide(dep, ta)
-        if ebitda and ebitda > 0:
-            result.dep_to_ebitda = safe_divide(dep, ebitda)
-        if gp and gp > 0:
-            result.dep_to_gross_profit = safe_divide(dep, gp)
-
-        # EBITDA-to-EBIT spread (how much D&A adds to EBITDA vs EBIT)
-        if ebitda and ebit and ebit > 0:
-            result.ebitda_to_ebit_spread = safe_divide(ebitda, ebit)
-
-        # Asset age proxy: D&A / Total Assets (higher = older assets)
-        if ta and ta > 0:
-            result.asset_age_proxy = safe_divide(dep, ta)
-
-        # Scoring based on dep_to_revenue (lower = lighter burden)
-        dtr = result.dep_to_revenue
-        if dtr is not None:
-            if dtr <= 0.03:
-                score = 10.0
-            elif dtr <= 0.05:
-                score = 8.5
-            elif dtr <= 0.08:
-                score = 7.0
-            elif dtr <= 0.12:
-                score = 5.5
-            elif dtr <= 0.18:
-                score = 4.0
-            elif dtr <= 0.25:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: dep/EBITDA <= 0.20 (low D&A relative to cash earnings)
-            if result.dep_to_ebitda is not None and result.dep_to_ebitda <= 0.20:
-                score += 0.5
-
-            # Adjustment: dep/assets <= 0.03 (newer/lighter assets)
-            if result.dep_to_assets is not None and result.dep_to_assets <= 0.03:
-                score += 0.5
-
-            result.db_score = min(10.0, max(0.0, score))
-
-            if result.db_score >= 8:
-                result.db_grade = "Excellent"
-            elif result.db_score >= 6:
-                result.db_grade = "Good"
-            elif result.db_score >= 4:
-                result.db_grade = "Adequate"
-            else:
-                result.db_grade = "Weak"
-
-            result.summary = (
-                f"Depreciation Burden: D&A/Rev={dtr:.1%}, "
-                f"Score={result.db_score:.1f}/10 ({result.db_grade})."
-            )
-
-        return result
+        """Phase 259: Depreciation Burden Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=DepreciationBurdenResult,
+            ratio_defs=[
+                ("dep_to_revenue", "depreciation", "revenue"),
+                ("dep_to_assets", "depreciation", "total_assets"),
+                ("dep_to_ebitda", "depreciation", "ebitda"),
+                ("dep_to_gross_profit", "depreciation", "gross_profit"),
+            ],
+            score_field="db_score", grade_field="db_grade",
+            primary="dep_to_revenue", higher_is_better=False,
+            thresholds=[(0.03, 10.0), (0.05, 8.5), (0.08, 7.0), (0.12, 5.5), (0.18, 4.0), (0.25, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("dep_to_ebitda") is not None and r["dep_to_ebitda"] <= 0.20, 0.5),
+                (lambda r, d: r.get("dep_to_assets") is not None and r["dep_to_assets"] <= 0.03, 0.5),
+            ],
+            derived=[
+                ("ebitda_to_ebit_spread", lambda r, d: safe_divide(d.ebitda, d.ebit) if d.ebitda and d.ebit and d.ebit > 0 else None),
+                ("asset_age_proxy", lambda r, d: r.get("dep_to_assets")),
+            ],
+            label="Depreciation Burden",
+        )
 
     def debt_to_capital_analysis(self, data: FinancialData) -> DebtToCapitalResult:
         """Phase 258: Debt-to-Capital Analysis.
@@ -11417,105 +10227,28 @@ class CharlieAnalyzer:
         return result
 
     def revenue_quality_index_analysis(self, data: FinancialData) -> RevenueQualityIndexResult:
-        """Phase 232: Revenue Quality Index Analysis.
-
-        Primary metric: OCF/Revenue — how much operating cash flow each dollar
-        of revenue generates. Higher = higher quality revenue.
-
-        Scoring thresholds (ocf_to_revenue):
-          >= 0.25 => 10
-          >= 0.20 => 8.5
-          >= 0.15 => 7.0
-          >= 0.10 => 5.5
-          >= 0.05 => 4.0
-          >= 0.00 => 2.5
-          < 0.00  => 1.0
-
-        Adjustments:
-          Gross margin >= 0.50     => +0.5
-          Gross margin < 0.20     => -0.5
-          AR/Revenue <= 0.10      => +0.5
-          AR/Revenue > 0.30       => -0.5
-
-        Score clamped to [0, 10].
-        """
-        result = RevenueQualityIndexResult()
-
-        rev = data.revenue
-        ocf = data.operating_cash_flow
-        gp = data.gross_profit
-        ni = data.net_income
-        ebitda = data.ebitda
-        ar = data.accounts_receivable
-        cash = data.cash
-
-        if rev is None or ocf is None:
-            result.summary = "Revenue Quality Index: Insufficient data."
-            return result
-
-        ocf_rev = safe_divide(ocf, rev)
-        result.ocf_to_revenue = ocf_rev
-
-        result.gross_margin = safe_divide(gp, rev)
-        result.ni_to_revenue = safe_divide(ni, rev)
-        result.ebitda_to_revenue = safe_divide(ebitda, rev)
-        result.ar_to_revenue = safe_divide(ar, rev)
-        result.cash_to_revenue = safe_divide(cash, rev)
-
-        if ocf_rev is None:
-            result.summary = "Revenue Quality Index: Cannot compute OCF/Revenue."
-            return result
-
-        if ocf_rev >= 0.25:
-            base = 10.0
-        elif ocf_rev >= 0.20:
-            base = 8.5
-        elif ocf_rev >= 0.15:
-            base = 7.0
-        elif ocf_rev >= 0.10:
-            base = 5.5
-        elif ocf_rev >= 0.05:
-            base = 4.0
-        elif ocf_rev >= 0.00:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        gm = result.gross_margin
-        if gm is not None:
-            if gm >= 0.50:
-                adj += 0.5
-            elif gm < 0.20:
-                adj -= 0.5
-
-        ar_rev = result.ar_to_revenue
-        if ar_rev is not None:
-            if ar_rev <= 0.10:
-                adj += 0.5
-            elif ar_rev > 0.30:
-                adj -= 0.5
-
-        result.rqi_score = max(0.0, min(10.0, base + adj))
-
-        if result.rqi_score >= 8:
-            result.rqi_grade = "Excellent"
-        elif result.rqi_score >= 6:
-            result.rqi_grade = "Good"
-        elif result.rqi_score >= 4:
-            result.rqi_grade = "Adequate"
-        else:
-            result.rqi_grade = "Weak"
-
-        ocf_s = f"{result.ocf_to_revenue:.4f}" if result.ocf_to_revenue is not None else "N/A"
-        gm_s = f"{result.gross_margin:.4f}" if result.gross_margin is not None else "N/A"
-        ar_s = f"{result.ar_to_revenue:.4f}" if result.ar_to_revenue is not None else "N/A"
-        result.summary = (
-            f"Revenue Quality Index: OCF/Rev={ocf_s}, "
-            f"GM={gm_s}, AR/Rev={ar_s}. "
-            f"Score={result.rqi_score:.1f}/10 ({result.rqi_grade})."
+        """Phase 232: Revenue Quality Index Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=RevenueQualityIndexResult,
+            ratio_defs=[
+                ("ocf_to_revenue", "operating_cash_flow", "revenue"),
+                ("gross_margin", "gross_profit", "revenue"),
+                ("ni_to_revenue", "net_income", "revenue"),
+                ("ebitda_to_revenue", "ebitda", "revenue"),
+                ("ar_to_revenue", "accounts_receivable", "revenue"),
+                ("cash_to_revenue", "cash", "revenue"),
+            ],
+            score_field="rqi_score", grade_field="rqi_grade",
+            primary="ocf_to_revenue", higher_is_better=True,
+            thresholds=[(0.25, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.00, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("gross_margin") is not None and r["gross_margin"] >= 0.50, 0.5),
+                (lambda r, d: r.get("gross_margin") is not None and r["gross_margin"] < 0.20, -0.5),
+                (lambda r, d: r.get("ar_to_revenue") is not None and r["ar_to_revenue"] <= 0.10, 0.5),
+                (lambda r, d: r.get("ar_to_revenue") is not None and r["ar_to_revenue"] > 0.30, -0.5),
+            ],
+            label="Revenue Quality Index",
         )
-        return result
 
     def fixed_asset_utilization_analysis(self, data: FinancialData) -> FixedAssetUtilizationResult:
         """Phase 221: Fixed Asset Utilization Analysis.
@@ -11797,2639 +10530,846 @@ class CharlieAnalyzer:
         return result
 
     def capital_discipline_analysis(self, data: FinancialData) -> CapitalDisciplineResult:
-        """Phase 211: Capital Discipline Analysis.
-
-        Evaluates how disciplined a company is with capital allocation.
-        Primary metric: Retained Earnings / Total Equity (higher is better).
-        """
-        result = CapitalDisciplineResult()
-
-        # RE/TE (primary)
-        rete = safe_divide(data.retained_earnings, data.total_equity)
-        result.retained_to_equity = rete
-
-        # RE/TA
-        result.retained_to_assets = safe_divide(data.retained_earnings, data.total_assets)
-
-        # Dividend Payout (Div/NI)
-        result.dividend_payout = safe_divide(data.dividends_paid, data.net_income)
-
-        # CapEx/OCF (reinvestment ratio)
-        result.capex_to_ocf = safe_divide(data.capex, data.operating_cash_flow)
-
-        # Debt/Equity
-        result.debt_to_equity = safe_divide(data.total_debt, data.total_equity)
-
-        # OCF/Debt
-        result.ocf_to_debt = safe_divide(data.operating_cash_flow, data.total_debt)
-
-        # --- Scoring: RE/TE-based ---
-        if rete is None:
-            result.cd_score = 0.0
-            result.cd_grade = "Weak"
-            result.summary = "Capital Discipline: Insufficient data for analysis."
-            return result
-
-        if rete >= 0.70:
-            score = 10.0
-        elif rete >= 0.60:
-            score = 8.5
-        elif rete >= 0.50:
-            score = 7.0
-        elif rete >= 0.40:
-            score = 5.5
-        elif rete >= 0.30:
-            score = 4.0
-        elif rete >= 0.15:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: OCF/TD (ability to repay)
-        ocftd = result.ocf_to_debt
-        if ocftd is not None:
-            if ocftd >= 0.50:
-                score += 0.5
-            elif ocftd < 0.15:
-                score -= 0.5
-
-        # Adjustment: CapEx/OCF (capital intensity — lower is better)
-        cxo = result.capex_to_ocf
-        if cxo is not None:
-            if cxo <= 0.30:
-                score += 0.5
-            elif cxo > 0.80:
-                score -= 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.cd_score = score
-
-        if score >= 8:
-            result.cd_grade = "Excellent"
-        elif score >= 6:
-            result.cd_grade = "Good"
-        elif score >= 4:
-            result.cd_grade = "Adequate"
-        else:
-            result.cd_grade = "Weak"
-
-        rete_s = f"{rete:.4f}" if rete is not None else "N/A"
-        ocftd_s = f"{ocftd:.4f}" if ocftd is not None else "N/A"
-        cxo_s = f"{cxo:.4f}" if cxo is not None else "N/A"
-        result.summary = (
-            f"Capital Discipline: RE/TE={rete_s}, OCF/Debt={ocftd_s}, "
-            f"CapEx/OCF={cxo_s}. Score={score:.1f}/10 ({result.cd_grade})."
+        """Phase 211: Capital Discipline Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=CapitalDisciplineResult,
+            ratio_defs=[
+                ("retained_to_equity", "retained_earnings", "total_equity"),
+                ("retained_to_assets", "retained_earnings", "total_assets"),
+                ("dividend_payout", "dividends_paid", "net_income"),
+                ("capex_to_ocf", "capex", "operating_cash_flow"),
+                ("debt_to_equity", "total_debt", "total_equity"),
+                ("ocf_to_debt", "operating_cash_flow", "total_debt"),
+            ],
+            score_field="cd_score", grade_field="cd_grade",
+            primary="retained_to_equity", higher_is_better=True,
+            thresholds=[(0.70, 10.0), (0.60, 8.5), (0.50, 7.0), (0.40, 5.5), (0.30, 4.0), (0.15, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ocf_to_debt") is not None and r["ocf_to_debt"] >= 0.50, 0.5),
+                (lambda r, d: r.get("ocf_to_debt") is not None and r["ocf_to_debt"] < 0.15, -0.5),
+                (lambda r, d: r.get("capex_to_ocf") is not None and r["capex_to_ocf"] <= 0.30, 0.5),
+                (lambda r, d: r.get("capex_to_ocf") is not None and r["capex_to_ocf"] > 0.80, -0.5),
+            ],
+            label="Capital Discipline",
         )
-
-        return result
 
     def resource_optimization_analysis(self, data: FinancialData) -> ResourceOptimizationResult:
-        """Phase 210: Resource Optimization Analysis.
-
-        Evaluates how efficiently a company converts revenue into free cash flow.
-        Primary metric: FCF/Revenue (higher is better).
-        """
-        result = ResourceOptimizationResult()
-
-        # Free Cash Flow = OCF - CapEx
-        fcf = None
-        if data.operating_cash_flow is not None and data.capex is not None:
-            fcf = data.operating_cash_flow - data.capex
-
-        # FCF/Revenue (primary)
-        fcf_rev = safe_divide(fcf, data.revenue)
-        result.fcf_to_revenue = fcf_rev
-
-        # OCF/Revenue
-        result.ocf_to_revenue = safe_divide(data.operating_cash_flow, data.revenue)
-
-        # CapEx/Revenue
-        result.capex_to_revenue = safe_divide(data.capex, data.revenue)
-
-        # OCF/Total Assets
-        result.ocf_to_assets = safe_divide(data.operating_cash_flow, data.total_assets)
-
-        # FCF/Total Assets
-        result.fcf_to_assets = safe_divide(fcf, data.total_assets)
-
-        # Dividend Payout Ratio (Div/NI)
-        result.dividend_payout_ratio = safe_divide(data.dividends_paid, data.net_income)
-
-        # --- Scoring: FCF/Revenue-based ---
-        if fcf_rev is None:
-            result.ro_score = 0.0
-            result.ro_grade = "Weak"
-            result.summary = "Resource Optimization: Insufficient data for analysis."
-            return result
-
-        if fcf_rev >= 0.20:
-            score = 10.0
-        elif fcf_rev >= 0.15:
-            score = 8.5
-        elif fcf_rev >= 0.12:
-            score = 7.0
-        elif fcf_rev >= 0.08:
-            score = 5.5
-        elif fcf_rev >= 0.05:
-            score = 4.0
-        elif fcf_rev >= 0.02:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: OCF/Revenue (cash generation efficiency)
-        ocfr = result.ocf_to_revenue
-        if ocfr is not None:
-            if ocfr >= 0.20:
-                score += 0.5
-            elif ocfr < 0.08:
-                score -= 0.5
-
-        # Adjustment: CapEx/Revenue (capital intensity — lower is better)
-        cxr = result.capex_to_revenue
-        if cxr is not None:
-            if cxr <= 0.05:
-                score += 0.5
-            elif cxr > 0.20:
-                score -= 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.ro_score = score
-
-        if score >= 8:
-            result.ro_grade = "Excellent"
-        elif score >= 6:
-            result.ro_grade = "Good"
-        elif score >= 4:
-            result.ro_grade = "Adequate"
-        else:
-            result.ro_grade = "Weak"
-
-        fr_s = f"{fcf_rev:.4f}" if fcf_rev is not None else "N/A"
-        ocfr_s = f"{ocfr:.4f}" if ocfr is not None else "N/A"
-        cxr_s = f"{cxr:.4f}" if cxr is not None else "N/A"
-        result.summary = (
-            f"Resource Optimization: FCF/Rev={fr_s}, OCF/Rev={ocfr_s}, "
-            f"CapEx/Rev={cxr_s}. Score={score:.1f}/10 ({result.ro_grade})."
+        """Phase 210: Resource Optimization Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=ResourceOptimizationResult,
+            ratio_defs=[
+                ("ocf_to_revenue", "operating_cash_flow", "revenue"),
+                ("capex_to_revenue", "capex", "revenue"),
+                ("ocf_to_assets", "operating_cash_flow", "total_assets"),
+                ("dividend_payout_ratio", "dividends_paid", "net_income"),
+            ],
+            score_field="ro_score", grade_field="ro_grade",
+            primary="fcf_to_revenue", higher_is_better=True,
+            thresholds=[(0.20, 10.0), (0.15, 8.5), (0.12, 7.0), (0.08, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ocf_to_revenue") is not None and r["ocf_to_revenue"] >= 0.20, 0.5),
+                (lambda r, d: r.get("ocf_to_revenue") is not None and r["ocf_to_revenue"] < 0.08, -0.5),
+                (lambda r, d: r.get("capex_to_revenue") is not None and r["capex_to_revenue"] <= 0.05, 0.5),
+                (lambda r, d: r.get("capex_to_revenue") is not None and r["capex_to_revenue"] > 0.20, -0.5),
+            ],
+            derived=[
+                ("fcf_to_revenue", lambda r, d: safe_divide((d.operating_cash_flow or 0) - (d.capex or 0), d.revenue) if d.operating_cash_flow is not None and d.capex is not None and d.revenue and d.revenue > 0 else None),
+                ("fcf_to_assets", lambda r, d: safe_divide((d.operating_cash_flow or 0) - (d.capex or 0), d.total_assets) if d.operating_cash_flow is not None and d.capex is not None else None),
+            ],
+            label="Resource Optimization",
         )
-
-        return result
 
     def financial_productivity_analysis(self, data: FinancialData) -> FinancialProductivityResult:
-        """Phase 205: Financial Productivity Analysis.
-
-        Measures how productively a company converts financial resources into output.
-        Primary metric: Revenue per Asset (Rev/TA — higher is better).
-        """
-        result = FinancialProductivityResult()
-
-        # Revenue per Asset (asset turnover)
-        rpa = safe_divide(data.revenue, data.total_assets)
-        result.revenue_per_asset = rpa
-
-        # Revenue per Equity
-        result.revenue_per_equity = safe_divide(data.revenue, data.total_equity)
-
-        # EBITDA per Employee proxy: EBITDA / OpEx (higher = more productive per cost unit)
-        result.ebitda_per_employee_proxy = safe_divide(data.ebitda, data.operating_expenses)
-
-        # Operating Income per Asset
-        result.operating_income_per_asset = safe_divide(data.operating_income, data.total_assets)
-
-        # Net Income per Revenue (net margin as productivity)
-        result.net_income_per_revenue = safe_divide(data.net_income, data.revenue)
-
-        # Cash Flow per Asset
-        result.cash_flow_per_asset = safe_divide(data.operating_cash_flow, data.total_assets)
-
-        # --- Scoring: RPA-based ---
-        if rpa is None:
-            result.fp_score = 0.0
-            result.fp_grade = "Weak"
-            result.summary = "Financial Productivity: Insufficient data for analysis."
-            return result
-
-        if rpa >= 2.0:
-            score = 10.0
-        elif rpa >= 1.5:
-            score = 8.5
-        elif rpa >= 1.0:
-            score = 7.0
-        elif rpa >= 0.70:
-            score = 5.5
-        elif rpa >= 0.40:
-            score = 4.0
-        elif rpa >= 0.20:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustment: EBITDA/OpEx (operational productivity)
-        epo = result.ebitda_per_employee_proxy
-        if epo is not None:
-            if epo >= 1.5:
-                score += 0.5
-            elif epo < 0.50:
-                score -= 0.5
-
-        # Adjustment: OCF/TA (cash productivity)
-        cfpa = result.cash_flow_per_asset
-        if cfpa is not None:
-            if cfpa >= 0.12:
-                score += 0.5
-            elif cfpa < 0.05:
-                score -= 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.fp_score = score
-
-        if score >= 8:
-            result.fp_grade = "Excellent"
-        elif score >= 6:
-            result.fp_grade = "Good"
-        elif score >= 4:
-            result.fp_grade = "Adequate"
-        else:
-            result.fp_grade = "Weak"
-
-        rpa_s = f"{rpa:.2f}" if rpa is not None else "N/A"
-        epo_s = f"{epo:.2f}" if epo is not None else "N/A"
-        cfpa_s = f"{cfpa:.2f}" if cfpa is not None else "N/A"
-        result.summary = (
-            f"Financial Productivity: Rev/Assets={rpa_s}, EBITDA/OpEx={epo_s}, "
-            f"OCF/Assets={cfpa_s}. Score={score:.1f}/10 ({result.fp_grade})."
+        """Phase 205: Financial Productivity Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=FinancialProductivityResult,
+            ratio_defs=[
+                ("revenue_per_asset", "revenue", "total_assets"),
+                ("revenue_per_equity", "revenue", "total_equity"),
+                ("ebitda_per_employee_proxy", "ebitda", "operating_expenses"),
+                ("operating_income_per_asset", "operating_income", "total_assets"),
+                ("net_income_per_revenue", "net_income", "revenue"),
+                ("cash_flow_per_asset", "operating_cash_flow", "total_assets"),
+            ],
+            score_field="fp_score", grade_field="fp_grade",
+            primary="revenue_per_asset", higher_is_better=True,
+            thresholds=[(2.0, 10.0), (1.5, 8.5), (1.0, 7.0), (0.70, 5.5), (0.40, 4.0), (0.20, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ebitda_per_employee_proxy") is not None and r["ebitda_per_employee_proxy"] >= 1.5, 0.5),
+                (lambda r, d: r.get("ebitda_per_employee_proxy") is not None and r["ebitda_per_employee_proxy"] < 0.50, -0.5),
+                (lambda r, d: r.get("cash_flow_per_asset") is not None and r["cash_flow_per_asset"] >= 0.12, 0.5),
+                (lambda r, d: r.get("cash_flow_per_asset") is not None and r["cash_flow_per_asset"] < 0.05, -0.5),
+            ],
+            label="Financial Productivity",
         )
-
-        return result
 
     def equity_preservation_analysis(self, data: FinancialData) -> EquityPreservationResult:
-        """Phase 198: Equity Preservation Analysis.
-
-        Metrics:
-            equity_to_assets: TE / TA (primary — higher is better)
-            retained_to_equity: RE / TE
-            equity_growth_capacity: NI / TE
-            equity_to_liabilities: TE / TL
-            tangible_equity_ratio: TE / TA (proxy)
-            equity_per_revenue: TE / Rev
-        """
-        result = EquityPreservationResult()
-        te = data.total_equity
-        ta = data.total_assets
-        re = data.retained_earnings
-        ni = data.net_income
-        tl = data.total_liabilities
-        rev = data.revenue
-
-        # Primary: equity-to-assets
-        eta = safe_divide(te, ta)
-        result.equity_to_assets = eta
-
-        # Secondary metrics
-        result.retained_to_equity = safe_divide(re, te)
-        result.equity_growth_capacity = safe_divide(ni, te)
-        result.equity_to_liabilities = safe_divide(te, tl)
-        result.tangible_equity_ratio = safe_divide(te, ta)
-        result.equity_per_revenue = safe_divide(te, rev)
-
-        # Scoring on equity-to-assets (higher is better)
-        if eta is None:
-            result.ep_score = 0.0
-            result.ep_grade = "Weak"
-            result.summary = "Equity Preservation: Insufficient data."
-            return result
-
-        if eta >= 0.60:
-            base = 10.0
-        elif eta >= 0.50:
-            base = 8.5
-        elif eta >= 0.40:
-            base = 7.0
-        elif eta >= 0.30:
-            base = 5.5
-        elif eta >= 0.20:
-            base = 4.0
-        elif eta >= 0.10:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Retained-to-equity adjustment
-        rte = result.retained_to_equity
-        if rte is not None:
-            if rte >= 0.60:
-                adj += 0.5
-            elif rte < 0.20:
-                adj -= 0.5
-
-        # Equity growth capacity adjustment
-        egc = result.equity_growth_capacity
-        if egc is not None:
-            if egc >= 0.15:
-                adj += 0.5
-            elif egc < 0.05:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.ep_score = score
-
-        if score >= 8:
-            result.ep_grade = "Excellent"
-        elif score >= 6:
-            result.ep_grade = "Good"
-        elif score >= 4:
-            result.ep_grade = "Adequate"
-        else:
-            result.ep_grade = "Weak"
-
-        eta_str = f"{eta:.2f}" if eta is not None else "N/A"
-        result.summary = (
-            f"Equity Preservation: Equity-to-assets {eta_str}, "
-            f"score {score:.1f}/10 ({result.ep_grade})."
+        """Phase 198: Equity Preservation Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=EquityPreservationResult,
+            ratio_defs=[
+                ("equity_to_assets", "total_equity", "total_assets"),
+                ("retained_to_equity", "retained_earnings", "total_equity"),
+                ("equity_growth_capacity", "net_income", "total_equity"),
+                ("equity_to_liabilities", "total_equity", "total_liabilities"),
+                ("tangible_equity_ratio", "total_equity", "total_assets"),
+                ("equity_per_revenue", "total_equity", "revenue"),
+            ],
+            score_field="ep_score", grade_field="ep_grade",
+            primary="equity_to_assets", higher_is_better=True,
+            thresholds=[(0.60, 10.0), (0.50, 8.5), (0.40, 7.0), (0.30, 5.5), (0.20, 4.0), (0.10, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("retained_to_equity") is not None and r["retained_to_equity"] >= 0.60, 0.5),
+                (lambda r, d: r.get("retained_to_equity") is not None and r["retained_to_equity"] < 0.20, -0.5),
+                (lambda r, d: r.get("equity_growth_capacity") is not None and r["equity_growth_capacity"] >= 0.15, 0.5),
+                (lambda r, d: r.get("equity_growth_capacity") is not None and r["equity_growth_capacity"] < 0.05, -0.5),
+            ],
+            label="Equity Preservation",
         )
-
-        return result
 
     def debt_management_analysis(self, data: FinancialData) -> DebtManagementResult:
-        """Phase 197: Debt Management Analysis.
-
-        Metrics:
-            debt_to_operating_income: TD / OI (primary — lower is better)
-            debt_to_ocf: TD / OCF
-            interest_to_revenue: IE / Rev
-            debt_to_gross_profit: TD / GP
-            net_debt_ratio: (TD - Cash) / TA
-            debt_coverage_ratio: EBITDA / (IE + TD * 0.1)
-        """
-        result = DebtManagementResult()
-        td = data.total_debt
-        oi = data.operating_income
-        ocf = data.operating_cash_flow
-        ie = data.interest_expense
-        rev = data.revenue
-        gp = data.gross_profit
-        cash = data.cash
-        ta = data.total_assets
-        ebitda = data.ebitda
-
-        # Primary: debt-to-operating-income
-        dtoi = safe_divide(td, oi)
-        result.debt_to_operating_income = dtoi
-
-        # Secondary metrics
-        result.debt_to_ocf = safe_divide(td, ocf)
-        result.interest_to_revenue = safe_divide(ie, rev)
-        result.debt_to_gross_profit = safe_divide(td, gp)
-
-        # Net debt ratio: (TD - Cash) / TA
-        if td is not None and cash is not None and ta is not None and ta > 0:
-            result.net_debt_ratio = (td - cash) / ta
-        else:
-            result.net_debt_ratio = None
-
-        # Debt coverage ratio: EBITDA / (IE + TD * 0.1)
-        if ebitda is not None and ie is not None and td is not None:
-            denom = ie + td * 0.1
-            if denom > 0:
-                result.debt_coverage_ratio = ebitda / denom
-            else:
-                result.debt_coverage_ratio = None
-        else:
-            result.debt_coverage_ratio = None
-
-        # Scoring on debt-to-OI (lower is better)
-        if dtoi is None:
-            result.dm_score = 0.0
-            result.dm_grade = "Weak"
-            result.summary = "Debt Management: Insufficient data."
-            return result
-
-        if dtoi <= 1.0:
-            base = 10.0
-        elif dtoi <= 2.0:
-            base = 8.5
-        elif dtoi <= 3.0:
-            base = 7.0
-        elif dtoi <= 4.0:
-            base = 5.5
-        elif dtoi <= 5.0:
-            base = 4.0
-        elif dtoi <= 7.0:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Interest-to-revenue adjustment
-        itr = result.interest_to_revenue
-        if itr is not None:
-            if itr <= 0.03:
-                adj += 0.5
-            elif itr > 0.10:
-                adj -= 0.5
-
-        # Debt coverage ratio adjustment
-        dcr = result.debt_coverage_ratio
-        if dcr is not None:
-            if dcr >= 3.0:
-                adj += 0.5
-            elif dcr < 1.5:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.dm_score = score
-
-        if score >= 8:
-            result.dm_grade = "Excellent"
-        elif score >= 6:
-            result.dm_grade = "Good"
-        elif score >= 4:
-            result.dm_grade = "Adequate"
-        else:
-            result.dm_grade = "Weak"
-
-        dtoi_str = f"{dtoi:.2f}" if dtoi is not None else "N/A"
-        result.summary = (
-            f"Debt Management: Debt-to-OI ratio {dtoi_str}, "
-            f"score {score:.1f}/10 ({result.dm_grade})."
+        """Phase 197: Debt Management Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=DebtManagementResult,
+            ratio_defs=[
+                ("debt_to_operating_income", "total_debt", "operating_income"),
+                ("debt_to_ocf", "total_debt", "operating_cash_flow"),
+                ("interest_to_revenue", "interest_expense", "revenue"),
+                ("debt_to_gross_profit", "total_debt", "gross_profit"),
+            ],
+            score_field="dm_score", grade_field="dm_grade",
+            primary="debt_to_operating_income", higher_is_better=False,
+            thresholds=[(1.0, 10.0), (2.0, 8.5), (3.0, 7.0), (4.0, 5.5), (5.0, 4.0), (7.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("interest_to_revenue") is not None and r["interest_to_revenue"] <= 0.03, 0.5),
+                (lambda r, d: r.get("interest_to_revenue") is not None and r["interest_to_revenue"] > 0.10, -0.5),
+                (lambda r, d: r.get("debt_coverage_ratio") is not None and r["debt_coverage_ratio"] >= 3.0, 0.5),
+                (lambda r, d: r.get("debt_coverage_ratio") is not None and r["debt_coverage_ratio"] < 1.5, -0.5),
+            ],
+            derived=[
+                ("net_debt_ratio", lambda r, d: ((d.total_debt or 0) - (d.cash or 0)) / d.total_assets if d.total_debt is not None and d.cash is not None and d.total_assets and d.total_assets > 0 else None),
+                ("debt_coverage_ratio", lambda r, d: d.ebitda / ((d.interest_expense or 0) + (d.total_debt or 0) * 0.1) if d.ebitda is not None and d.interest_expense is not None and d.total_debt is not None and ((d.interest_expense or 0) + (d.total_debt or 0) * 0.1) > 0 else None),
+            ],
+            label="Debt Management",
         )
-
-        return result
 
     def income_retention_analysis(self, data: FinancialData) -> IncomeRetentionResult:
-        """Phase 196: Income Retention Analysis.
-
-        Metrics:
-            net_to_gross_ratio: NI / GP (primary — higher is better)
-            net_to_operating_ratio: NI / OI
-            net_to_ebitda_ratio: NI / EBITDA
-            retention_rate: RE / NI
-            income_to_asset_generation: NI / TA
-            after_tax_margin: NI / Rev
-        """
-        result = IncomeRetentionResult()
-        ni = data.net_income
-        gp = data.gross_profit
-        oi = data.operating_income
-        ebitda = data.ebitda
-        re = data.retained_earnings
-        ta = data.total_assets
-        rev = data.revenue
-
-        # Primary: net-to-gross ratio
-        ntgr = safe_divide(ni, gp)
-        result.net_to_gross_ratio = ntgr
-
-        # Secondary metrics
-        result.net_to_operating_ratio = safe_divide(ni, oi)
-        result.net_to_ebitda_ratio = safe_divide(ni, ebitda)
-        result.retention_rate = safe_divide(re, ni)
-        result.income_to_asset_generation = safe_divide(ni, ta)
-        result.after_tax_margin = safe_divide(ni, rev)
-
-        # Scoring on net-to-gross ratio (higher is better)
-        if ntgr is None:
-            result.ir_score = 0.0
-            result.ir_grade = "Weak"
-            result.summary = "Income Retention: Insufficient data."
-            return result
-
-        if ntgr >= 0.45:
-            base = 10.0
-        elif ntgr >= 0.35:
-            base = 8.5
-        elif ntgr >= 0.25:
-            base = 7.0
-        elif ntgr >= 0.18:
-            base = 5.5
-        elif ntgr >= 0.10:
-            base = 4.0
-        elif ntgr >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Net-to-operating ratio adjustment
-        ntor = result.net_to_operating_ratio
-        if ntor is not None:
-            if ntor >= 0.80:
-                adj += 0.5
-            elif ntor < 0.50:
-                adj -= 0.5
-
-        # After-tax margin adjustment
-        atm = result.after_tax_margin
-        if atm is not None:
-            if atm >= 0.15:
-                adj += 0.5
-            elif atm < 0.05:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.ir_score = score
-
-        if score >= 8:
-            result.ir_grade = "Excellent"
-        elif score >= 6:
-            result.ir_grade = "Good"
-        elif score >= 4:
-            result.ir_grade = "Adequate"
-        else:
-            result.ir_grade = "Weak"
-
-        ntgr_str = f"{ntgr:.2f}" if ntgr is not None else "N/A"
-        result.summary = (
-            f"Income Retention: Net-to-gross ratio {ntgr_str}, "
-            f"score {score:.1f}/10 ({result.ir_grade})."
+        """Phase 196: Income Retention Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=IncomeRetentionResult,
+            ratio_defs=[
+                ("net_to_gross_ratio", "net_income", "gross_profit"),
+                ("net_to_operating_ratio", "net_income", "operating_income"),
+                ("net_to_ebitda_ratio", "net_income", "ebitda"),
+                ("retention_rate", "retained_earnings", "net_income"),
+                ("income_to_asset_generation", "net_income", "total_assets"),
+                ("after_tax_margin", "net_income", "revenue"),
+            ],
+            score_field="ir_score", grade_field="ir_grade",
+            primary="net_to_gross_ratio", higher_is_better=True,
+            thresholds=[(0.45, 10.0), (0.35, 8.5), (0.25, 7.0), (0.18, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("net_to_operating_ratio") is not None and r["net_to_operating_ratio"] >= 0.80, 0.5),
+                (lambda r, d: r.get("net_to_operating_ratio") is not None and r["net_to_operating_ratio"] < 0.50, -0.5),
+                (lambda r, d: r.get("after_tax_margin") is not None and r["after_tax_margin"] >= 0.15, 0.5),
+                (lambda r, d: r.get("after_tax_margin") is not None and r["after_tax_margin"] < 0.05, -0.5),
+            ],
+            label="Income Retention",
         )
-
-        return result
 
     def operational_efficiency_analysis(self, data: FinancialData) -> OperationalEfficiencyResult:
-        """Phase 195: Operational Efficiency Analysis.
-
-        Metrics:
-            oi_margin: OI / Rev (primary — higher is better)
-            revenue_to_assets: Rev / TA
-            gross_profit_per_asset: GP / TA
-            opex_efficiency: Rev / OpEx
-            asset_utilization: Rev / CA
-            income_per_liability: OI / TL
-        """
-        result = OperationalEfficiencyResult()
-        oi = data.operating_income
-        rev = data.revenue
-        ta = data.total_assets
-        gp = data.gross_profit
-        opex = data.operating_expenses
-        ca = data.current_assets
-        tl = data.total_liabilities
-
-        # Primary: OI margin
-        oim = safe_divide(oi, rev)
-        result.oi_margin = oim
-
-        # Secondary metrics
-        result.revenue_to_assets = safe_divide(rev, ta)
-        result.gross_profit_per_asset = safe_divide(gp, ta)
-        result.opex_efficiency = safe_divide(rev, opex)
-        result.asset_utilization = safe_divide(rev, ca)
-        result.income_per_liability = safe_divide(oi, tl)
-
-        # Scoring on OI margin (higher is better)
-        if oim is None:
-            result.oe_score = 0.0
-            result.oe_grade = "Weak"
-            result.summary = "Operational Efficiency: Insufficient data."
-            return result
-
-        if oim >= 0.25:
-            base = 10.0
-        elif oim >= 0.20:
-            base = 8.5
-        elif oim >= 0.15:
-            base = 7.0
-        elif oim >= 0.10:
-            base = 5.5
-        elif oim >= 0.05:
-            base = 4.0
-        elif oim >= 0.02:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Revenue-to-assets adjustment
-        rta = result.revenue_to_assets
-        if rta is not None:
-            if rta >= 0.80:
-                adj += 0.5
-            elif rta < 0.30:
-                adj -= 0.5
-
-        # Opex efficiency adjustment
-        oe = result.opex_efficiency
-        if oe is not None:
-            if oe >= 5.0:
-                adj += 0.5
-            elif oe < 2.0:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.oe_score = score
-
-        if score >= 8:
-            result.oe_grade = "Excellent"
-        elif score >= 6:
-            result.oe_grade = "Good"
-        elif score >= 4:
-            result.oe_grade = "Adequate"
-        else:
-            result.oe_grade = "Weak"
-
-        oim_str = f"{oim:.2f}" if oim is not None else "N/A"
-        result.summary = (
-            f"Operational Efficiency: OI margin {oim_str}, "
-            f"score {score:.1f}/10 ({result.oe_grade})."
+        """Phase 195: Operational Efficiency Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=OperationalEfficiencyResult,
+            ratio_defs=[
+                ("oi_margin", "operating_income", "revenue"),
+                ("revenue_to_assets", "revenue", "total_assets"),
+                ("gross_profit_per_asset", "gross_profit", "total_assets"),
+                ("opex_efficiency", "revenue", "operating_expenses"),
+                ("asset_utilization", "revenue", "current_assets"),
+                ("income_per_liability", "operating_income", "total_liabilities"),
+            ],
+            score_field="oe_score", grade_field="oe_grade",
+            primary="oi_margin", higher_is_better=True,
+            thresholds=[(0.25, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.02, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("revenue_to_assets") is not None and r["revenue_to_assets"] >= 0.80, 0.5),
+                (lambda r, d: r.get("revenue_to_assets") is not None and r["revenue_to_assets"] < 0.30, -0.5),
+                (lambda r, d: r.get("opex_efficiency") is not None and r["opex_efficiency"] >= 5.0, 0.5),
+                (lambda r, d: r.get("opex_efficiency") is not None and r["opex_efficiency"] < 2.0, -0.5),
+            ],
+            label="Operational Efficiency",
         )
-        return result
 
     def operating_momentum_analysis(self, data: FinancialData) -> OperatingMomentumResult:
-        """Phase 191: Operating Momentum Analysis.
-
-        Metrics:
-            ebitda_margin: EBITDA / Rev (primary — higher is better)
-            ebit_margin: EBIT / Rev
-            ocf_margin: OCF / Rev
-            gross_to_operating_conversion: OI / GP
-            operating_cash_conversion: OCF / OI
-            overhead_absorption: OI / OpEx
-        """
-        result = OperatingMomentumResult()
-        rev = data.revenue
-        ebitda = data.ebitda
-        ebit = data.ebit
-        ocf = data.operating_cash_flow
-        gp = data.gross_profit
-        oi = data.operating_income
-        opex = data.operating_expenses
-
-        # Primary: EBITDA margin
-        em = safe_divide(ebitda, rev)
-        result.ebitda_margin = em
-
-        # Secondary metrics
-        result.ebit_margin = safe_divide(ebit, rev)
-        result.ocf_margin = safe_divide(ocf, rev)
-        result.gross_to_operating_conversion = safe_divide(oi, gp)
-        result.operating_cash_conversion = safe_divide(ocf, oi)
-        result.overhead_absorption = safe_divide(oi, opex)
-
-        # Scoring on EBITDA margin (higher is better)
-        if em is None:
-            result.om_score = 0.0
-            result.om_grade = "Weak"
-            result.summary = "Operating Momentum: Insufficient data."
-            return result
-
-        if em >= 0.30:
-            base = 10.0
-        elif em >= 0.25:
-            base = 8.5
-        elif em >= 0.20:
-            base = 7.0
-        elif em >= 0.15:
-            base = 5.5
-        elif em >= 0.10:
-            base = 4.0
-        elif em >= 0.05:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        # Gross-to-operating conversion adjustment
-        gtoc = result.gross_to_operating_conversion
-        if gtoc is not None:
-            if gtoc >= 0.50:
-                adj += 0.5
-            elif gtoc < 0.25:
-                adj -= 0.5
-
-        # Operating cash conversion adjustment
-        occ = result.operating_cash_conversion
-        if occ is not None:
-            if occ >= 1.0:
-                adj += 0.5
-            elif occ < 0.60:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.om_score = score
-
-        if score >= 8:
-            result.om_grade = "Excellent"
-        elif score >= 6:
-            result.om_grade = "Good"
-        elif score >= 4:
-            result.om_grade = "Adequate"
-        else:
-            result.om_grade = "Weak"
-
-        em_str = f"{em:.2f}" if em is not None else "N/A"
-        result.summary = (
-            f"Operating Momentum: EBITDA margin {em_str}, "
-            f"score {score:.1f}/10 ({result.om_grade})."
+        """Phase 191: Operating Momentum Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=OperatingMomentumResult,
+            ratio_defs=[
+                ("ebitda_margin", "ebitda", "revenue"),
+                ("ebit_margin", "ebit", "revenue"),
+                ("ocf_margin", "operating_cash_flow", "revenue"),
+                ("gross_to_operating_conversion", "operating_income", "gross_profit"),
+                ("operating_cash_conversion", "operating_cash_flow", "operating_income"),
+                ("overhead_absorption", "operating_income", "operating_expenses"),
+            ],
+            score_field="om_score", grade_field="om_grade",
+            primary="ebitda_margin", higher_is_better=True,
+            thresholds=[(0.30, 10.0), (0.25, 8.5), (0.20, 7.0), (0.15, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("gross_to_operating_conversion") is not None and r["gross_to_operating_conversion"] >= 0.50, 0.5),
+                (lambda r, d: r.get("gross_to_operating_conversion") is not None and r["gross_to_operating_conversion"] < 0.25, -0.5),
+                (lambda r, d: r.get("operating_cash_conversion") is not None and r["operating_cash_conversion"] >= 1.0, 0.5),
+                (lambda r, d: r.get("operating_cash_conversion") is not None and r["operating_cash_conversion"] < 0.60, -0.5),
+            ],
+            label="Operating Momentum",
         )
-        return result
 
     def payout_discipline_analysis(self, data: FinancialData) -> PayoutDisciplineResult:
-        """Phase 185: Payout Discipline Analysis.
-
-        Measures the sustainability and prudence of a company's dividend
-        and capital return policies relative to cash generation.
-        """
-        result = PayoutDisciplineResult()
-
-        ocf = data.operating_cash_flow
-        div = data.dividends_paid
-        ni = data.net_income
-        capex = data.capex
-        rev = data.revenue
-
-        # --- Primary: Cash Dividend Coverage = OCF / Div ---
-        result.cash_dividend_coverage = safe_divide(ocf, div)
-
-        # --- Payout Ratio = Div / NI ---
-        result.payout_ratio = safe_divide(div, ni)
-
-        # --- Retention Ratio = (NI - Div) / NI ---
-        if ni is not None and div is not None and ni > 0:
-            result.retention_ratio = (ni - div) / ni
-        else:
-            result.retention_ratio = None
-
-        # --- Dividend-to-OCF = Div / OCF ---
-        result.dividend_to_ocf = safe_divide(div, ocf)
-
-        # --- CapEx Priority = CapEx / (CapEx + Div) ---
-        if capex is not None and div is not None and (capex + div) > 0:
-            result.capex_priority = capex / (capex + div)
-        else:
-            result.capex_priority = None
-
-        # --- Free Cash After Dividends = (OCF - CapEx - Div) / Rev ---
-        if ocf is not None and capex is not None and div is not None and rev is not None and rev > 0:
-            result.free_cash_after_dividends = (ocf - capex - div) / rev
-        else:
-            result.free_cash_after_dividends = None
-
-        # --- Scoring (primary = Cash Dividend Coverage) ---
-        cdc = result.cash_dividend_coverage
-        if cdc is None:
-            result.pd_score = 0.0
-            result.pd_grade = "Weak"
-            result.summary = "Payout Discipline: Insufficient data."
-            return result
-
-        if cdc >= 5.0:
-            base = 10.0
-        elif cdc >= 4.0:
-            base = 8.5
-        elif cdc >= 3.0:
-            base = 7.0
-        elif cdc >= 2.0:
-            base = 5.5
-        elif cdc >= 1.5:
-            base = 4.0
-        elif cdc >= 1.0:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        cp = result.capex_priority
-        if cp is not None:
-            if cp >= 0.60:
-                adj += 0.5
-            elif cp < 0.30:
-                adj -= 0.5
-
-        rr = result.retention_ratio
-        if rr is not None:
-            if rr >= 0.60:
-                adj += 0.5
-            elif rr < 0.30:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.pd_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.pd_grade = grade
-
-        cp_str = f"{cp:.2f}" if cp is not None else "N/A"
-        rr_str = f"{rr:.2f}" if rr is not None else "N/A"
-        result.summary = (
-            f"Payout Discipline: Cash Div Coverage {cdc:.2f}x, "
-            f"CapEx Priority {cp_str}, "
-            f"Retention {rr_str}. "
-            f"Score {score:.1f}/10. "
-            f"Status: {grade}."
+        """Phase 185: Payout Discipline Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=PayoutDisciplineResult,
+            ratio_defs=[
+                ("cash_dividend_coverage", "operating_cash_flow", "dividends_paid"),
+                ("payout_ratio", "dividends_paid", "net_income"),
+                ("dividend_to_ocf", "dividends_paid", "operating_cash_flow"),
+            ],
+            derived=[
+                ("retention_ratio", lambda r, d: (
+                    (d.net_income - d.dividends_paid) / d.net_income
+                    if d.net_income is not None and d.dividends_paid is not None and d.net_income > 0
+                    else None
+                )),
+                ("capex_priority", lambda r, d: (
+                    d.capex / (d.capex + d.dividends_paid)
+                    if d.capex is not None and d.dividends_paid is not None
+                    and (d.capex + d.dividends_paid) > 0 else None
+                )),
+                ("free_cash_after_dividends", lambda r, d: (
+                    (d.operating_cash_flow - d.capex - d.dividends_paid) / d.revenue
+                    if d.operating_cash_flow is not None and d.capex is not None
+                    and d.dividends_paid is not None and d.revenue is not None and d.revenue > 0
+                    else None
+                )),
+            ],
+            score_field="pd_score", grade_field="pd_grade",
+            primary="cash_dividend_coverage", higher_is_better=True,
+            thresholds=[(5.0, 10.0), (4.0, 8.5), (3.0, 7.0), (2.0, 5.5), (1.5, 4.0), (1.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("capex_priority") is not None and r["capex_priority"] >= 0.60, 0.5),
+                (lambda r, d: r.get("capex_priority") is not None and r["capex_priority"] < 0.30, -0.5),
+                (lambda r, d: r.get("retention_ratio") is not None and r["retention_ratio"] >= 0.60, 0.5),
+                (lambda r, d: r.get("retention_ratio") is not None and r["retention_ratio"] < 0.30, -0.5),
+            ],
+            label="Payout Discipline",
         )
-
-        return result
 
     def income_resilience_analysis(self, data: FinancialData) -> IncomeResilienceResult:
-        """Phase 184: Income Resilience Analysis.
-
-        Measures how well a company's income stream withstands cost pressures,
-        interest burden, and tax drag from operations to bottom line.
-        """
-        result = IncomeResilienceResult()
-
-        oi = data.operating_income
-        rev = data.revenue
-        ebit = data.ebit
-        ie = data.interest_expense
-        ni = data.net_income
-        da = data.depreciation
-        ebitda = data.ebitda
-
-        # --- Primary: Operating Income Stability = OI / Rev ---
-        result.operating_income_stability = safe_divide(oi, rev)
-
-        # --- EBIT Coverage = EBIT / IE ---
-        result.ebit_coverage = safe_divide(ebit, ie)
-
-        # --- Net Margin Resilience = NI / OI ---
-        result.net_margin_resilience = safe_divide(ni, oi)
-
-        # --- Depreciation Buffer = D&A / OI ---
-        result.depreciation_buffer = safe_divide(da, oi)
-
-        # --- Tax & Interest Drag = (OI - NI) / OI ---
-        if oi is not None and ni is not None and oi > 0:
-            result.tax_interest_drag = (oi - ni) / oi
-        else:
-            result.tax_interest_drag = None
-
-        # --- EBITDA Cushion = EBITDA / IE ---
-        result.ebitda_cushion = safe_divide(ebitda, ie)
-
-        # --- Scoring (primary = Operating Income Stability) ---
-        ois = result.operating_income_stability
-        if ois is None:
-            result.ir_score = 0.0
-            result.ir_grade = "Weak"
-            result.summary = "Income Resilience: Insufficient data."
-            return result
-
-        if ois >= 0.25:
-            base = 10.0
-        elif ois >= 0.20:
-            base = 8.5
-        elif ois >= 0.15:
-            base = 7.0
-        elif ois >= 0.10:
-            base = 5.5
-        elif ois >= 0.06:
-            base = 4.0
-        elif ois >= 0.03:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        ec = result.ebit_coverage
-        if ec is not None:
-            if ec >= 5.0:
-                adj += 0.5
-            elif ec < 2.0:
-                adj -= 0.5
-
-        nmr = result.net_margin_resilience
-        if nmr is not None:
-            if nmr >= 0.70:
-                adj += 0.5
-            elif nmr < 0.40:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.ir_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.ir_grade = grade
-
-        ec_str = f"{ec:.2f}x" if ec is not None else "N/A"
-        nmr_str = f"{nmr:.2f}" if nmr is not None else "N/A"
-        result.summary = (
-            f"Income Resilience: OI Stability {ois:.2f}, "
-            f"EBIT Coverage {ec_str}, "
-            f"NM Resilience {nmr_str}. "
-            f"Score {score:.1f}/10. "
-            f"Status: {grade}."
+        """Phase 184: Income Resilience Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=IncomeResilienceResult,
+            ratio_defs=[
+                ("operating_income_stability", "operating_income", "revenue"),
+                ("ebit_coverage", "ebit", "interest_expense"),
+                ("net_margin_resilience", "net_income", "operating_income"),
+                ("depreciation_buffer", "depreciation", "operating_income"),
+                ("ebitda_cushion", "ebitda", "interest_expense"),
+            ],
+            derived=[
+                ("tax_interest_drag", lambda r, d: (
+                    (d.operating_income - d.net_income) / d.operating_income
+                    if d.operating_income is not None and d.net_income is not None and d.operating_income > 0
+                    else None
+                )),
+            ],
+            score_field="ir_score", grade_field="ir_grade",
+            primary="operating_income_stability", higher_is_better=True,
+            thresholds=[(0.25, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.06, 4.0), (0.03, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ebit_coverage") is not None and r["ebit_coverage"] >= 5.0, 0.5),
+                (lambda r, d: r.get("ebit_coverage") is not None and r["ebit_coverage"] < 2.0, -0.5),
+                (lambda r, d: r.get("net_margin_resilience") is not None and r["net_margin_resilience"] >= 0.70, 0.5),
+                (lambda r, d: r.get("net_margin_resilience") is not None and r["net_margin_resilience"] < 0.40, -0.5),
+            ],
+            label="Income Resilience",
         )
-
-        return result
 
     def structural_strength_analysis(self, data: FinancialData) -> StructuralStrengthResult:
-        """Phase 182: Structural Strength Analysis.
-
-        Measures the structural soundness of a company's balance sheet
-        through leverage, equity cushion, and liability composition.
-        """
-        result = StructuralStrengthResult()
-
-        ta = data.total_assets
-        te = data.total_equity
-        td = data.total_debt
-        tl = data.total_liabilities
-        cl = data.current_liabilities
-        ca = data.current_assets
-
-        # --- Primary: Equity Multiplier = TA / TE (lower = stronger) ---
-        result.equity_multiplier = safe_divide(ta, te)
-
-        # --- Debt-to-Equity = TD / TE ---
-        result.debt_to_equity = safe_divide(td, te)
-
-        # --- Liability Composition = CL / TL ---
-        result.liability_composition = safe_divide(cl, tl)
-
-        # --- Equity Cushion = (TE - TD) / TA ---
-        if te is not None and td is not None and ta is not None and ta > 0:
-            result.equity_cushion = (te - td) / ta
-        else:
-            result.equity_cushion = None
-
-        # --- Fixed Asset Coverage = TE / (TA - CA) ---
-        if te is not None and ta is not None and ca is not None:
-            fixed_assets = ta - ca
-            result.fixed_asset_coverage = safe_divide(te, fixed_assets) if fixed_assets > 0 else None
-        else:
-            result.fixed_asset_coverage = None
-
-        # --- Financial Leverage Ratio = TL / TE ---
-        result.financial_leverage_ratio = safe_divide(tl, te)
-
-        # --- Scoring (primary = Equity Multiplier, inverted) ---
-        em = result.equity_multiplier
-        if em is None:
-            result.ss_score = 0.0
-            result.ss_grade = "Weak"
-            result.summary = "Structural Strength: Insufficient data."
-            return result
-
-        if em <= 1.25:
-            base = 10.0
-        elif em <= 1.50:
-            base = 8.5
-        elif em <= 1.75:
-            base = 7.0
-        elif em <= 2.00:
-            base = 5.5
-        elif em <= 2.50:
-            base = 4.0
-        elif em <= 3.50:
-            base = 2.5
-        else:
-            base = 1.0
-
-        adj = 0.0
-        dte = result.debt_to_equity
-        if dte is not None:
-            if dte <= 0.50:
-                adj += 0.5
-            elif dte >= 2.00:
-                adj -= 0.5
-
-        ec = result.equity_cushion
-        if ec is not None:
-            if ec >= 0.30:
-                adj += 0.5
-            elif ec < 0.10:
-                adj -= 0.5
-
-        score = max(0.0, min(10.0, base + adj))
-        result.ss_score = score
-
-        if score >= 8:
-            grade = "Excellent"
-        elif score >= 6:
-            grade = "Good"
-        elif score >= 4:
-            grade = "Adequate"
-        else:
-            grade = "Weak"
-        result.ss_grade = grade
-
-        dte_str = f"{dte:.2f}x" if dte is not None else "N/A"
-        ec_str = f"{ec:.2f}" if ec is not None else "N/A"
-        result.summary = (
-            f"Structural Strength: Equity Multiplier {em:.2f}x, "
-            f"Debt-to-Equity {dte_str}, "
-            f"Equity Cushion {ec_str}. "
-            f"Score {score:.1f}/10. "
-            f"Status: {grade}."
+        """Phase 182: Structural Strength Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=StructuralStrengthResult,
+            ratio_defs=[
+                ("equity_multiplier", "total_assets", "total_equity"),
+                ("debt_to_equity", "total_debt", "total_equity"),
+                ("liability_composition", "current_liabilities", "total_liabilities"),
+                ("financial_leverage_ratio", "total_liabilities", "total_equity"),
+            ],
+            derived=[
+                ("equity_cushion", lambda r, d: (
+                    (d.total_equity - d.total_debt) / d.total_assets
+                    if d.total_equity is not None and d.total_debt is not None
+                    and d.total_assets is not None and d.total_assets > 0 else None
+                )),
+                ("fixed_asset_coverage", lambda r, d: (
+                    safe_divide(d.total_equity, d.total_assets - d.current_assets)
+                    if d.total_equity is not None and d.total_assets is not None and d.current_assets is not None
+                    and (d.total_assets - d.current_assets) > 0 else None
+                )),
+            ],
+            score_field="ss_score", grade_field="ss_grade",
+            primary="equity_multiplier", higher_is_better=False,
+            thresholds=[(1.25, 10.0), (1.50, 8.5), (1.75, 7.0), (2.00, 5.5), (2.50, 4.0), (3.50, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_to_equity") is not None and r["debt_to_equity"] <= 0.50, 0.5),
+                (lambda r, d: r.get("debt_to_equity") is not None and r["debt_to_equity"] >= 2.00, -0.5),
+                (lambda r, d: r.get("equity_cushion") is not None and r["equity_cushion"] >= 0.30, 0.5),
+                (lambda r, d: r.get("equity_cushion") is not None and r["equity_cushion"] < 0.10, -0.5),
+            ],
+            label="Structural Strength",
         )
-
-        return result
 
     def profit_conversion_analysis(self, data: FinancialData) -> ProfitConversionResult:
-        """Phase 179: Profit Conversion Analysis.
-
-        Measures how effectively a company converts revenue into various
-        levels of profit and cash, indicating operational discipline.
-        """
-        result = ProfitConversionResult()
-
-        revenue = data.revenue
-        gross_profit = data.gross_profit
-        operating_income = data.operating_income
-        net_income = data.net_income
-        ebitda = data.ebitda
-        operating_cash_flow = data.operating_cash_flow
-
-        # Gross Conversion: GP / Revenue — primary
-        result.gross_conversion = safe_divide(gross_profit, revenue)
-
-        # Operating Conversion: OI / Revenue
-        result.operating_conversion = safe_divide(operating_income, revenue)
-
-        # Net Conversion: NI / Revenue
-        result.net_conversion = safe_divide(net_income, revenue)
-
-        # EBITDA Conversion: EBITDA / Revenue
-        result.ebitda_conversion = safe_divide(ebitda, revenue)
-
-        # Cash Conversion: OCF / Revenue
-        result.cash_conversion = safe_divide(operating_cash_flow, revenue)
-
-        # Profit-to-Cash Ratio: OCF / NI
-        result.profit_to_cash_ratio = safe_divide(operating_cash_flow, net_income)
-
-        # --- Scoring on Gross Conversion ---
-        gc = result.gross_conversion
-        if gc is not None:
-            if gc >= 0.60:
-                base = 10.0
-            elif gc >= 0.50:
-                base = 8.5
-            elif gc >= 0.40:
-                base = 7.0
-            elif gc >= 0.30:
-                base = 5.5
-            elif gc >= 0.20:
-                base = 4.0
-            elif gc >= 0.10:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Operating Conversion
-            oc = result.operating_conversion
-            if oc is not None:
-                if oc >= 0.20:
-                    base += 0.5
-                elif oc < 0.05:
-                    base -= 0.5
-
-            # Adjustment: Cash Conversion
-            cc = result.cash_conversion
-            if cc is not None:
-                if cc >= 0.20:
-                    base += 0.5
-                elif cc < 0.05:
-                    base -= 0.5
-
-            result.pc_score = max(0.0, min(10.0, base))
-        else:
-            result.pc_score = 0.0
-
-        # Grade
-        if result.pc_score >= 8:
-            result.pc_grade = "Excellent"
-        elif result.pc_score >= 6:
-            result.pc_grade = "Good"
-        elif result.pc_score >= 4:
-            result.pc_grade = "Adequate"
-        else:
-            result.pc_grade = "Weak"
-
-        # Summary
-        gc_str = f"{gc:.2%}" if gc is not None else "N/A"
-        grade = result.pc_grade
-        result.summary = (
-            f"Profit Conversion score {result.pc_score:.1f}/10 ({grade}). "
-            f"Gross Conversion {gc_str}."
+        """Phase 179: Profit Conversion Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=ProfitConversionResult,
+            ratio_defs=[
+                ("gross_conversion", "gross_profit", "revenue"),
+                ("operating_conversion", "operating_income", "revenue"),
+                ("net_conversion", "net_income", "revenue"),
+                ("ebitda_conversion", "ebitda", "revenue"),
+                ("cash_conversion", "operating_cash_flow", "revenue"),
+                ("profit_to_cash_ratio", "operating_cash_flow", "net_income"),
+            ],
+            score_field="pc_score", grade_field="pc_grade",
+            primary="gross_conversion", higher_is_better=True,
+            thresholds=[(0.60, 10.0), (0.50, 8.5), (0.40, 7.0), (0.30, 5.5), (0.20, 4.0), (0.10, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("operating_conversion") is not None and r["operating_conversion"] >= 0.20, 0.5),
+                (lambda r, d: r.get("operating_conversion") is not None and r["operating_conversion"] < 0.05, -0.5),
+                (lambda r, d: r.get("cash_conversion") is not None and r["cash_conversion"] >= 0.20, 0.5),
+                (lambda r, d: r.get("cash_conversion") is not None and r["cash_conversion"] < 0.05, -0.5),
+            ],
+            label="Profit Conversion",
         )
-
-        return result
 
     def asset_deployment_efficiency_analysis(self, data: FinancialData) -> AssetDeploymentEfficiencyResult:
-        """Phase 172: Asset Deployment Efficiency Analysis.
-
-        Measures how efficiently assets are deployed to generate revenue,
-        income, and cash flow returns.
-        """
-        result = AssetDeploymentEfficiencyResult()
-
-        revenue = data.revenue
-        total_assets = data.total_assets
-        current_assets = data.current_assets
-        operating_income = data.operating_income
-        operating_cash_flow = data.operating_cash_flow
-        inventory = data.inventory
-        accounts_receivable = data.accounts_receivable
-
-        # Asset Turnover: Rev / TA — primary
-        result.asset_turnover = safe_divide(revenue, total_assets)
-
-        # Fixed Asset Leverage: Rev / (TA - CA)
-        if revenue is not None and total_assets is not None and current_assets is not None:
-            fixed_assets = total_assets - current_assets
-            if fixed_assets > 0:
-                result.fixed_asset_leverage = revenue / fixed_assets
-
-        # Asset Income Yield: OI / TA
-        result.asset_income_yield = safe_divide(operating_income, total_assets)
-
-        # Asset Cash Yield: OCF / TA
-        result.asset_cash_yield = safe_divide(operating_cash_flow, total_assets)
-
-        # Inventory Velocity: Rev / Inv
-        result.inventory_velocity = safe_divide(revenue, inventory)
-
-        # Receivables Velocity: Rev / AR
-        result.receivables_velocity = safe_divide(revenue, accounts_receivable)
-
-        # --- Scoring on Asset Turnover ---
-        at = result.asset_turnover
-        if at is not None:
-            if at >= 1.50:
-                base = 10.0
-            elif at >= 1.20:
-                base = 8.5
-            elif at >= 0.90:
-                base = 7.0
-            elif at >= 0.60:
-                base = 5.5
-            elif at >= 0.40:
-                base = 4.0
-            elif at >= 0.20:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Asset Income Yield
-            aiy = result.asset_income_yield
-            if aiy is not None:
-                if aiy >= 0.10:
-                    base += 0.5
-                elif aiy < 0.02:
-                    base -= 0.5
-
-            # Adjustment: Asset Cash Yield
-            acy = result.asset_cash_yield
-            if acy is not None:
-                if acy >= 0.10:
-                    base += 0.5
-                elif acy < 0.02:
-                    base -= 0.5
-
-            result.ade_score = max(0.0, min(10.0, base))
-        else:
-            result.ade_score = 0.0
-
-        # Grade
-        if result.ade_score >= 8:
-            result.ade_grade = "Excellent"
-        elif result.ade_score >= 6:
-            result.ade_grade = "Good"
-        elif result.ade_score >= 4:
-            result.ade_grade = "Adequate"
-        else:
-            result.ade_grade = "Weak"
-
-        # Summary
-        at_str = f"{at:.2f}" if at is not None else "N/A"
-        result.summary = (
-            f"Asset Deployment Efficiency score {result.ade_score:.1f}/10 ({result.ade_grade}). "
-            f"Asset Turnover {at_str}."
+        """Phase 172: Asset Deployment Efficiency Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=AssetDeploymentEfficiencyResult,
+            ratio_defs=[
+                ("asset_turnover", "revenue", "total_assets"),
+                ("asset_income_yield", "operating_income", "total_assets"),
+                ("asset_cash_yield", "operating_cash_flow", "total_assets"),
+                ("inventory_velocity", "revenue", "inventory"),
+                ("receivables_velocity", "revenue", "accounts_receivable"),
+            ],
+            derived=[
+                ("fixed_asset_leverage", lambda r, d: (
+                    safe_divide(d.revenue, d.total_assets - d.current_assets)
+                    if d.revenue is not None and d.total_assets is not None and d.current_assets is not None
+                    and (d.total_assets - d.current_assets) > 0 else None
+                )),
+            ],
+            score_field="ade_score", grade_field="ade_grade",
+            primary="asset_turnover", higher_is_better=True,
+            thresholds=[(1.50, 10.0), (1.20, 8.5), (0.90, 7.0), (0.60, 5.5), (0.40, 4.0), (0.20, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("asset_income_yield") is not None and r["asset_income_yield"] >= 0.10, 0.5),
+                (lambda r, d: r.get("asset_income_yield") is not None and r["asset_income_yield"] < 0.02, -0.5),
+                (lambda r, d: r.get("asset_cash_yield") is not None and r["asset_cash_yield"] >= 0.10, 0.5),
+                (lambda r, d: r.get("asset_cash_yield") is not None and r["asset_cash_yield"] < 0.02, -0.5),
+            ],
+            label="Asset Deployment Efficiency",
         )
-
-        return result
 
     def profit_sustainability_analysis(self, data: FinancialData) -> ProfitSustainabilityResult:
-        """Phase 171: Profit Sustainability Analysis.
-
-        Measures whether profits are sustainable, cash-backed, and efficiently
-        retained for future growth.
-        """
-        result = ProfitSustainabilityResult()
-
-        operating_cash_flow = data.operating_cash_flow
-        net_income = data.net_income
-        revenue = data.revenue
-        dividends_paid = data.dividends_paid
-        total_assets = data.total_assets
-        operating_income = data.operating_income
-        ebitda = data.ebitda
-
-        # Profit Cash Backing: OCF / NI — primary
-        result.profit_cash_backing = safe_divide(operating_cash_flow, net_income)
-
-        # Profit Margin Depth: NI / Rev
-        result.profit_margin_depth = safe_divide(net_income, revenue)
-
-        # Profit Reinvestment: (NI - Div) / NI
-        if net_income is not None and dividends_paid is not None and net_income != 0:
-            result.profit_reinvestment = (net_income - dividends_paid) / net_income
-
-        # Profit-to-Asset: NI / TA
-        result.profit_to_asset = safe_divide(net_income, total_assets)
-
-        # Profit Stability Proxy: OI / EBITDA
-        result.profit_stability_proxy = safe_divide(operating_income, ebitda)
-
-        # Profit Leverage: NI / OI
-        result.profit_leverage = safe_divide(net_income, operating_income)
-
-        # --- Scoring on Profit Cash Backing ---
-        pcb = result.profit_cash_backing
-        if pcb is not None:
-            if pcb >= 1.50:
-                base = 10.0
-            elif pcb >= 1.20:
-                base = 8.5
-            elif pcb >= 1.00:
-                base = 7.0
-            elif pcb >= 0.80:
-                base = 5.5
-            elif pcb >= 0.50:
-                base = 4.0
-            elif pcb >= 0.20:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Profit Margin Depth
-            pmd = result.profit_margin_depth
-            if pmd is not None:
-                if pmd >= 0.15:
-                    base += 0.5
-                elif pmd < 0.05:
-                    base -= 0.5
-
-            # Adjustment: Profit Reinvestment
-            pri = result.profit_reinvestment
-            if pri is not None:
-                if pri >= 0.70:
-                    base += 0.5
-                elif pri < 0.30:
-                    base -= 0.5
-
-            result.ps_score = max(0.0, min(10.0, base))
-        else:
-            result.ps_score = 0.0
-
-        # Grade
-        if result.ps_score >= 8:
-            result.ps_grade = "Excellent"
-        elif result.ps_score >= 6:
-            result.ps_grade = "Good"
-        elif result.ps_score >= 4:
-            result.ps_grade = "Adequate"
-        else:
-            result.ps_grade = "Weak"
-
-        # Summary
-        pcb_str = f"{pcb:.2f}" if pcb is not None else "N/A"
-        result.summary = (
-            f"Profit Sustainability score {result.ps_score:.1f}/10 ({result.ps_grade}). "
-            f"Profit Cash Backing {pcb_str}."
+        """Phase 171: Profit Sustainability Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=ProfitSustainabilityResult,
+            ratio_defs=[
+                ("profit_cash_backing", "operating_cash_flow", "net_income"),
+                ("profit_margin_depth", "net_income", "revenue"),
+                ("profit_to_asset", "net_income", "total_assets"),
+                ("profit_stability_proxy", "operating_income", "ebitda"),
+                ("profit_leverage", "net_income", "operating_income"),
+            ],
+            derived=[
+                ("profit_reinvestment", lambda r, d: (
+                    (d.net_income - d.dividends_paid) / d.net_income
+                    if d.net_income is not None and d.dividends_paid is not None and d.net_income != 0
+                    else None
+                )),
+            ],
+            score_field="ps_score", grade_field="ps_grade",
+            primary="profit_cash_backing", higher_is_better=True,
+            thresholds=[(1.50, 10.0), (1.20, 8.5), (1.00, 7.0), (0.80, 5.5), (0.50, 4.0), (0.20, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("profit_margin_depth") is not None and r["profit_margin_depth"] >= 0.15, 0.5),
+                (lambda r, d: r.get("profit_margin_depth") is not None and r["profit_margin_depth"] < 0.05, -0.5),
+                (lambda r, d: r.get("profit_reinvestment") is not None and r["profit_reinvestment"] >= 0.70, 0.5),
+                (lambda r, d: r.get("profit_reinvestment") is not None and r["profit_reinvestment"] < 0.30, -0.5),
+            ],
+            label="Profit Sustainability",
         )
-
-        return result
 
     def debt_discipline_analysis(self, data: FinancialData) -> DebtDisciplineResult:
-        """Phase 170: Debt Discipline Analysis.
-
-        Measures how responsibly a company manages its debt obligations,
-        servicing capacity, and leverage prudence.
-        """
-        result = DebtDisciplineResult()
-
-        total_debt = data.total_debt
-        total_assets = data.total_assets
-        ebitda = data.ebitda
-        interest_expense = data.interest_expense
-        operating_cash_flow = data.operating_cash_flow
-        total_equity = data.total_equity
-        revenue = data.revenue
-        capex = data.capex
-
-        # Debt Prudence Ratio: TD / TA — primary (lower is better)
-        result.debt_prudence_ratio = safe_divide(total_debt, total_assets)
-
-        # Debt Servicing Power: EBITDA / (IE + TD/5)
-        if ebitda is not None and interest_expense is not None and total_debt is not None:
-            denom = interest_expense + total_debt / 5.0
-            if denom > 0:
-                result.debt_servicing_power = ebitda / denom
-
-        # Debt Coverage Spread: OCF / TD
-        result.debt_coverage_spread = safe_divide(operating_cash_flow, total_debt)
-
-        # Debt-to-Equity Leverage: TD / TE
-        result.debt_to_equity_leverage = safe_divide(total_debt, total_equity)
-
-        # Interest Absorption: IE / Rev (lower is better)
-        result.interest_absorption = safe_divide(interest_expense, revenue)
-
-        # Debt Repayment Capacity: (OCF - CapEx) / TD
-        if operating_cash_flow is not None and capex is not None and total_debt is not None and total_debt != 0:
-            result.debt_repayment_capacity = (operating_cash_flow - capex) / total_debt
-
-        # --- Scoring on Debt Prudence Ratio (INVERTED: lower is better) ---
-        dpr = result.debt_prudence_ratio
-        if dpr is not None:
-            if dpr <= 0.10:
-                base = 10.0
-            elif dpr <= 0.20:
-                base = 8.5
-            elif dpr <= 0.30:
-                base = 7.0
-            elif dpr <= 0.40:
-                base = 5.5
-            elif dpr <= 0.50:
-                base = 4.0
-            elif dpr <= 0.70:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Debt Coverage Spread
-            dcs = result.debt_coverage_spread
-            if dcs is not None:
-                if dcs >= 0.50:
-                    base += 0.5
-                elif dcs < 0.10:
-                    base -= 0.5
-
-            # Adjustment: Debt-to-Equity Leverage
-            del_ = result.debt_to_equity_leverage
-            if del_ is not None:
-                if del_ <= 0.30:
-                    base += 0.5
-                elif del_ >= 1.50:
-                    base -= 0.5
-
-            result.dd_score = max(0.0, min(10.0, base))
-        else:
-            result.dd_score = 0.0
-
-        # Grade
-        if result.dd_score >= 8:
-            result.dd_grade = "Excellent"
-        elif result.dd_score >= 6:
-            result.dd_grade = "Good"
-        elif result.dd_score >= 4:
-            result.dd_grade = "Adequate"
-        else:
-            result.dd_grade = "Weak"
-
-        # Summary
-        dpr_str = f"{dpr:.1%}" if dpr is not None else "N/A"
-        result.summary = (
-            f"Debt Discipline score {result.dd_score:.1f}/10 ({result.dd_grade}). "
-            f"Debt Prudence Ratio {dpr_str}."
+        """Phase 170: Debt Discipline Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=DebtDisciplineResult,
+            ratio_defs=[
+                ("debt_prudence_ratio", "total_debt", "total_assets"),
+                ("debt_coverage_spread", "operating_cash_flow", "total_debt"),
+                ("debt_to_equity_leverage", "total_debt", "total_equity"),
+                ("interest_absorption", "interest_expense", "revenue"),
+            ],
+            derived=[
+                ("debt_servicing_power", lambda r, d: (
+                    d.ebitda / (d.interest_expense + d.total_debt / 5.0)
+                    if d.ebitda is not None and d.interest_expense is not None and d.total_debt is not None
+                    and (d.interest_expense + d.total_debt / 5.0) > 0 else None
+                )),
+                ("debt_repayment_capacity", lambda r, d: (
+                    (d.operating_cash_flow - d.capex) / d.total_debt
+                    if d.operating_cash_flow is not None and d.capex is not None
+                    and d.total_debt is not None and d.total_debt != 0 else None
+                )),
+            ],
+            score_field="dd_score", grade_field="dd_grade",
+            primary="debt_prudence_ratio", higher_is_better=False,
+            thresholds=[(0.10, 10.0), (0.20, 8.5), (0.30, 7.0), (0.40, 5.5), (0.50, 4.0), (0.70, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_coverage_spread") is not None and r["debt_coverage_spread"] >= 0.50, 0.5),
+                (lambda r, d: r.get("debt_coverage_spread") is not None and r["debt_coverage_spread"] < 0.10, -0.5),
+                (lambda r, d: r.get("debt_to_equity_leverage") is not None and r["debt_to_equity_leverage"] <= 0.30, 0.5),
+                (lambda r, d: r.get("debt_to_equity_leverage") is not None and r["debt_to_equity_leverage"] >= 1.50, -0.5),
+            ],
+            label="Debt Discipline",
         )
-
-        return result
 
     def capital_preservation_analysis(self, data: FinancialData) -> CapitalPreservationResult:
-        """Phase 168: Capital Preservation Analysis.
-
-        Measures how well a company preserves and protects its capital base
-        through retained earnings power, equity stability, and capital buffers.
-        """
-        result = CapitalPreservationResult()
-
-        retained_earnings = data.retained_earnings
-        total_assets = data.total_assets
-        total_liabilities = data.total_liabilities
-        total_equity = data.total_equity
-        cash = data.cash
-        operating_cash_flow = data.operating_cash_flow
-        total_debt = data.total_debt
-        net_income = data.net_income
-        current_assets = data.current_assets
-        current_liabilities = data.current_liabilities
-
-        # Retained Earnings Power: RE / TA — primary
-        result.retained_earnings_power = safe_divide(retained_earnings, total_assets)
-
-        # Capital Erosion Rate: (TL - Cash) / TE
-        if total_liabilities is not None and cash is not None and total_equity is not None and total_equity != 0:
-            result.capital_erosion_rate = (total_liabilities - cash) / total_equity
-
-        # Asset Integrity Ratio: (TA - TL) / TA
-        if total_assets is not None and total_liabilities is not None and total_assets != 0:
-            result.asset_integrity_ratio = (total_assets - total_liabilities) / total_assets
-
-        # Operating Capital Ratio: OCF / TD
-        result.operating_capital_ratio = safe_divide(operating_cash_flow, total_debt)
-
-        # Net Worth Growth Proxy: NI / TE
-        result.net_worth_growth_proxy = safe_divide(net_income, total_equity)
-
-        # Capital Buffer: (CA - CL) / TA
-        if current_assets is not None and current_liabilities is not None and total_assets is not None and total_assets != 0:
-            result.capital_buffer = (current_assets - current_liabilities) / total_assets
-
-        # --- Scoring on Retained Earnings Power ---
-        rep = result.retained_earnings_power
-        if rep is not None:
-            if rep >= 0.40:
-                base = 10.0
-            elif rep >= 0.35:
-                base = 8.5
-            elif rep >= 0.30:
-                base = 7.0
-            elif rep >= 0.25:
-                base = 5.5
-            elif rep >= 0.20:
-                base = 4.0
-            elif rep >= 0.10:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Capital Erosion Rate
-            cer = result.capital_erosion_rate
-            if cer is not None:
-                if cer <= 0.50:
-                    base += 0.5
-                elif cer >= 1.50:
-                    base -= 0.5
-
-            # Adjustment: Operating Capital Ratio
-            ocr = result.operating_capital_ratio
-            if ocr is not None:
-                if ocr >= 0.50:
-                    base += 0.5
-                elif ocr < 0.10:
-                    base -= 0.5
-
-            result.cp_score = max(0.0, min(10.0, base))
-        else:
-            result.cp_score = 0.0
-
-        # Grade
-        if result.cp_score >= 8:
-            result.cp_grade = "Excellent"
-        elif result.cp_score >= 6:
-            result.cp_grade = "Good"
-        elif result.cp_score >= 4:
-            result.cp_grade = "Adequate"
-        else:
-            result.cp_grade = "Weak"
-
-        # Summary
-        rep_str = f"{rep:.1%}" if rep is not None else "N/A"
-        result.summary = (
-            f"Capital Preservation score {result.cp_score:.1f}/10 ({result.cp_grade}). "
-            f"Retained Earnings Power {rep_str}."
+        """Phase 168: Capital Preservation Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=CapitalPreservationResult,
+            ratio_defs=[
+                ("retained_earnings_power", "retained_earnings", "total_assets"),
+                ("operating_capital_ratio", "operating_cash_flow", "total_debt"),
+                ("net_worth_growth_proxy", "net_income", "total_equity"),
+            ],
+            derived=[
+                ("capital_erosion_rate", lambda r, d: (
+                    (d.total_liabilities - d.cash) / d.total_equity
+                    if d.total_liabilities is not None and d.cash is not None
+                    and d.total_equity is not None and d.total_equity != 0 else None
+                )),
+                ("asset_integrity_ratio", lambda r, d: (
+                    (d.total_assets - d.total_liabilities) / d.total_assets
+                    if d.total_assets is not None and d.total_liabilities is not None
+                    and d.total_assets != 0 else None
+                )),
+                ("capital_buffer", lambda r, d: (
+                    (d.current_assets - d.current_liabilities) / d.total_assets
+                    if d.current_assets is not None and d.current_liabilities is not None
+                    and d.total_assets is not None and d.total_assets != 0 else None
+                )),
+            ],
+            score_field="cp_score", grade_field="cp_grade",
+            primary="retained_earnings_power", higher_is_better=True,
+            thresholds=[(0.40, 10.0), (0.35, 8.5), (0.30, 7.0), (0.25, 5.5), (0.20, 4.0), (0.10, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("capital_erosion_rate") is not None and r["capital_erosion_rate"] <= 0.50, 0.5),
+                (lambda r, d: r.get("capital_erosion_rate") is not None and r["capital_erosion_rate"] >= 1.50, -0.5),
+                (lambda r, d: r.get("operating_capital_ratio") is not None and r["operating_capital_ratio"] >= 0.50, 0.5),
+                (lambda r, d: r.get("operating_capital_ratio") is not None and r["operating_capital_ratio"] < 0.10, -0.5),
+            ],
+            label="Capital Preservation",
         )
 
-        return result
-
     def obligation_coverage_analysis(self, data: FinancialData) -> ObligationCoverageResult:
-        """Phase 160: Obligation Coverage Analysis.
-
-        Evaluates the company's ability to meet its debt and fixed-charge
-        obligations from operating performance.
-        """
-        result = ObligationCoverageResult()
-
-        ebitda = data.ebitda
-        interest_expense = data.interest_expense
-        operating_cash_flow = data.operating_cash_flow
-        capex = data.capex
-        total_debt = data.total_debt
-        revenue = data.revenue
-
-        # EBITDA Interest Coverage: EBITDA / IE
-        result.ebitda_interest_coverage = safe_divide(ebitda, interest_expense)
-
-        # Cash Interest Coverage: OCF / IE
-        result.cash_interest_coverage = safe_divide(operating_cash_flow, interest_expense)
-
-        # Debt Amortization Capacity: (OCF - CapEx) / TD
-        if operating_cash_flow is not None and capex is not None:
-            fcf = operating_cash_flow - capex
-            result.debt_amortization_capacity = safe_divide(fcf, total_debt)
-
-        # Fixed Charge Coverage: EBITDA / (IE + CapEx)
-        if ebitda is not None:
-            ie_val = interest_expense if interest_expense is not None else 0.0
-            cap_val = capex if capex is not None else 0.0
-            denom = ie_val + cap_val
-            if denom > 0:
-                result.fixed_charge_coverage = ebitda / denom
-
-        # Debt Burden Ratio: TD / EBITDA
-        result.debt_burden_ratio = safe_divide(total_debt, ebitda)
-
-        # Interest to Revenue: IE / Rev
-        result.interest_to_revenue = safe_divide(interest_expense, revenue)
-
-        # --- Scoring on EBITDA Interest Coverage ---
-        eic = result.ebitda_interest_coverage
-        if eic is not None:
-            if eic >= 10.0:
-                base = 10.0
-            elif eic >= 7.0:
-                base = 8.5
-            elif eic >= 5.0:
-                base = 7.0
-            elif eic >= 3.0:
-                base = 5.5
-            elif eic >= 2.0:
-                base = 4.0
-            elif eic >= 1.0:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Debt Burden Ratio (lower is better)
-            dbr = result.debt_burden_ratio
-            if dbr is not None:
-                if dbr <= 2.0:
-                    base += 0.5
-                elif dbr >= 5.0:
-                    base -= 0.5
-
-            # Adjustment: Cash Interest Coverage
-            cic = result.cash_interest_coverage
-            if cic is not None:
-                if cic >= 8.0:
-                    base += 0.5
-                elif cic < 1.5:
-                    base -= 0.5
-
-            result.oc_score = max(0.0, min(10.0, base))
-        else:
-            result.oc_score = 0.0
-
-        # Grade
-        if result.oc_score >= 8:
-            result.oc_grade = "Excellent"
-        elif result.oc_score >= 6:
-            result.oc_grade = "Good"
-        elif result.oc_score >= 4:
-            result.oc_grade = "Adequate"
-        else:
-            result.oc_grade = "Weak"
-
-        result.summary = (
-            f"Obligation Coverage: EBITDA Interest Coverage={eic:.2f}x "
-            if eic is not None else "Obligation Coverage: EBITDA Interest Coverage=N/A "
-        ) + f"Grade={result.oc_grade}."
-
-        return result
+        """Phase 160: Obligation Coverage Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=ObligationCoverageResult,
+            ratio_defs=[
+                ("ebitda_interest_coverage", "ebitda", "interest_expense"),
+                ("cash_interest_coverage", "operating_cash_flow", "interest_expense"),
+                ("debt_burden_ratio", "total_debt", "ebitda"),
+                ("interest_to_revenue", "interest_expense", "revenue"),
+            ],
+            derived=[
+                ("debt_amortization_capacity", lambda r, d: (
+                    safe_divide(d.operating_cash_flow - d.capex, d.total_debt)
+                    if d.operating_cash_flow is not None and d.capex is not None else None
+                )),
+                ("fixed_charge_coverage", lambda r, d: (
+                    d.ebitda / ((d.interest_expense or 0.0) + (d.capex or 0.0))
+                    if d.ebitda is not None and ((d.interest_expense or 0.0) + (d.capex or 0.0)) > 0
+                    else None
+                )),
+            ],
+            score_field="oc_score", grade_field="oc_grade",
+            primary="ebitda_interest_coverage", higher_is_better=True,
+            thresholds=[(10.0, 10.0), (7.0, 8.5), (5.0, 7.0), (3.0, 5.5), (2.0, 4.0), (1.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_burden_ratio") is not None and r["debt_burden_ratio"] <= 2.0, 0.5),
+                (lambda r, d: r.get("debt_burden_ratio") is not None and r["debt_burden_ratio"] >= 5.0, -0.5),
+                (lambda r, d: r.get("cash_interest_coverage") is not None and r["cash_interest_coverage"] >= 8.0, 0.5),
+                (lambda r, d: r.get("cash_interest_coverage") is not None and r["cash_interest_coverage"] < 1.5, -0.5),
+            ],
+            label="Obligation Coverage",
+        )
 
     def internal_growth_capacity_analysis(self, data: FinancialData) -> InternalGrowthCapacityResult:
-        """Phase 159: Internal Growth Capacity Analysis.
-
-        Evaluates the company's ability to fund growth internally
-        through retained earnings and operating cash flows.
-        """
-        result = InternalGrowthCapacityResult()
-
-        net_income = data.net_income
-        total_equity = data.total_equity
-        total_assets = data.total_assets
-        dividends_paid = data.dividends_paid
-        operating_cash_flow = data.operating_cash_flow
-        capex = data.capex
-        depreciation = data.depreciation
-        retained_earnings = data.retained_earnings
-
-        # Plowback Ratio: (NI - Div) / NI
-        if net_income is not None and net_income != 0:
-            div = dividends_paid if dividends_paid is not None else 0.0
-            result.plowback_ratio = (net_income - div) / net_income
-
-        # Sustainable Growth Rate: ROE * Plowback
-        roe = safe_divide(net_income, total_equity)
-        if roe is not None and result.plowback_ratio is not None:
-            result.sustainable_growth_rate = roe * result.plowback_ratio
-
-        # Internal Growth Rate: ROA * b / (1 - ROA * b)
-        roa = safe_divide(net_income, total_assets)
-        if roa is not None and result.plowback_ratio is not None:
-            roa_b = roa * result.plowback_ratio
-            if roa_b < 1.0:
-                result.internal_growth_rate = roa_b / (1.0 - roa_b)
-
-        # Reinvestment Rate: CapEx / D&A
-        result.reinvestment_rate = safe_divide(capex, depreciation)
-
-        # Growth Financing Ratio: OCF / (CapEx + Div)
-        if operating_cash_flow is not None:
-            div_val = dividends_paid if dividends_paid is not None else 0.0
-            cap_val = capex if capex is not None else 0.0
-            denom = cap_val + div_val
-            if denom > 0:
-                result.growth_financing_ratio = operating_cash_flow / denom
-
-        # Equity Growth Rate: RE / TE
-        result.equity_growth_rate = safe_divide(retained_earnings, total_equity)
-
-        # --- Scoring on Growth Financing Ratio ---
-        gfr = result.growth_financing_ratio
-        if gfr is not None:
-            if gfr >= 2.5:
-                base = 10.0
-            elif gfr >= 2.0:
-                base = 8.5
-            elif gfr >= 1.5:
-                base = 7.0
-            elif gfr >= 1.2:
-                base = 5.5
-            elif gfr >= 1.0:
-                base = 4.0
-            elif gfr >= 0.5:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Plowback Ratio
-            pb = result.plowback_ratio
-            if pb is not None:
-                if pb >= 0.60:
-                    base += 0.5
-                elif pb < 0.20:
-                    base -= 0.5
-
-            # Adjustment: Reinvestment Rate
-            rr = result.reinvestment_rate
-            if rr is not None:
-                if 1.0 <= rr <= 2.5:
-                    base += 0.5
-                elif rr > 4.0:
-                    base -= 0.5
-
-            result.igc_score = max(0.0, min(10.0, base))
-        else:
-            result.igc_score = 0.0
-
-        # Grade
-        if result.igc_score >= 8:
-            result.igc_grade = "Excellent"
-        elif result.igc_score >= 6:
-            result.igc_grade = "Good"
-        elif result.igc_score >= 4:
-            result.igc_grade = "Adequate"
-        else:
-            result.igc_grade = "Weak"
-
-        result.summary = (
-            f"Internal Growth Capacity: Growth Financing={gfr:.2f}x "
-            if gfr is not None else "Internal Growth Capacity: Growth Financing=N/A "
-        ) + f"Grade={result.igc_grade}."
-
-        return result
+        """Phase 159: Internal Growth Capacity Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=InternalGrowthCapacityResult,
+            ratio_defs=[
+                ("reinvestment_rate", "capex", "depreciation"),
+                ("equity_growth_rate", "retained_earnings", "total_equity"),
+            ],
+            derived=[
+                ("plowback_ratio", lambda r, d: (
+                    (d.net_income - (d.dividends_paid if d.dividends_paid is not None else 0.0)) / d.net_income
+                    if d.net_income is not None and d.net_income != 0 else None
+                )),
+                ("sustainable_growth_rate", lambda r, d: (
+                    safe_divide(d.net_income, d.total_equity) * r["plowback_ratio"]
+                    if safe_divide(d.net_income, d.total_equity) is not None and r.get("plowback_ratio") is not None
+                    else None
+                )),
+                ("internal_growth_rate", lambda r, d: (
+                    (lambda roa_b: roa_b / (1.0 - roa_b) if roa_b < 1.0 else None)(
+                        safe_divide(d.net_income, d.total_assets) * r["plowback_ratio"]
+                    ) if safe_divide(d.net_income, d.total_assets) is not None and r.get("plowback_ratio") is not None
+                    else None
+                )),
+                ("growth_financing_ratio", lambda r, d: (
+                    d.operating_cash_flow / ((d.capex or 0.0) + (d.dividends_paid or 0.0))
+                    if d.operating_cash_flow is not None
+                    and ((d.capex or 0.0) + (d.dividends_paid or 0.0)) > 0
+                    else None
+                )),
+            ],
+            score_field="igc_score", grade_field="igc_grade",
+            primary="growth_financing_ratio", higher_is_better=True,
+            thresholds=[(2.5, 10.0), (2.0, 8.5), (1.5, 7.0), (1.2, 5.5), (1.0, 4.0), (0.5, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("plowback_ratio") is not None and r["plowback_ratio"] >= 0.60, 0.5),
+                (lambda r, d: r.get("plowback_ratio") is not None and r["plowback_ratio"] < 0.20, -0.5),
+                (lambda r, d: r.get("reinvestment_rate") is not None and 1.0 <= r["reinvestment_rate"] <= 2.5, 0.5),
+                (lambda r, d: r.get("reinvestment_rate") is not None and r["reinvestment_rate"] > 4.0, -0.5),
+            ],
+            label="Internal Growth Capacity",
+        )
 
     def liability_management_analysis(self, data: FinancialData) -> LiabilityManagementResult:
         """Phase 146: Liability Management Analysis."""
-        result = LiabilityManagementResult()
-        tl = data.total_liabilities
-        ta = data.total_assets
-        te = data.total_equity
-        cl = data.current_liabilities
-        ebitda = data.ebitda
-        rev = data.revenue
-        cash = data.cash
-
-        result.liability_to_assets = safe_divide(tl, ta)
-        result.liability_to_equity = safe_divide(tl, te)
-        result.current_liability_ratio = safe_divide(cl, tl)
-        result.liability_coverage = safe_divide(ebitda, tl)
-        result.liability_to_revenue = safe_divide(tl, rev)
-
-        # Net Liability = (TL - Cash) / TA
-        if tl is not None and ta is not None and ta > 0:
-            c = cash if cash is not None else 0.0
-            result.net_liability = (tl - c) / ta
-
-        # Scoring on Liability to Assets (lower = better)
-        la = result.liability_to_assets
-        if la is not None:
-            if la <= 0.30:
-                score = 10.0
-            elif la <= 0.35:
-                score = 8.5
-            elif la <= 0.40:
-                score = 7.0
-            elif la <= 0.50:
-                score = 5.5
-            elif la <= 0.60:
-                score = 4.0
-            elif la <= 0.70:
-                score = 2.5
-            else:
-                score = 1.0
-
-            lc = result.liability_coverage
-            if lc is not None:
-                if lc >= 0.30:
-                    score += 0.5
-                elif lc < 0.10:
-                    score -= 0.5
-
-            clr = result.current_liability_ratio
-            if clr is not None:
-                if clr <= 0.40:
-                    score += 0.5
-                elif clr > 0.70:
-                    score -= 0.5
-
-            result.lm_score = max(0.0, min(10.0, score))
-        else:
-            result.lm_score = 0.0
-
-        s = result.lm_score
-        grade = "Excellent" if s >= 8 else "Good" if s >= 6 else "Adequate" if s >= 4 else "Weak"
-        result.lm_grade = grade
-
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Liability Management — Liab/Assets: {_pct(result.liability_to_assets)}, "
-            f"Liab/Equity: {_r2(result.liability_to_equity)}, "
-            f"Coverage: {_r2(result.liability_coverage)}, "
-            f"Net Liability: {_pct(result.net_liability)}. "
-            f"Score: {result.lm_score}/10. Grade: {grade}."
+        return self._scored_analysis(
+            data=data, result_class=LiabilityManagementResult,
+            ratio_defs=[
+                ("liability_to_assets", "total_liabilities", "total_assets"),
+                ("liability_to_equity", "total_liabilities", "total_equity"),
+                ("current_liability_ratio", "current_liabilities", "total_liabilities"),
+                ("liability_coverage", "ebitda", "total_liabilities"),
+                ("liability_to_revenue", "total_liabilities", "revenue"),
+            ],
+            derived=[
+                ("net_liability", lambda r, d: (
+                    (d.total_liabilities - (d.cash if d.cash is not None else 0.0)) / d.total_assets
+                    if d.total_liabilities is not None and d.total_assets is not None and d.total_assets > 0
+                    else None
+                )),
+            ],
+            score_field="lm_score", grade_field="lm_grade",
+            primary="liability_to_assets", higher_is_better=False,
+            thresholds=[(0.30, 10.0), (0.35, 8.5), (0.40, 7.0), (0.50, 5.5), (0.60, 4.0), (0.70, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("liability_coverage") is not None and r["liability_coverage"] >= 0.30, 0.5),
+                (lambda r, d: r.get("liability_coverage") is not None and r["liability_coverage"] < 0.10, -0.5),
+                (lambda r, d: r.get("current_liability_ratio") is not None and r["current_liability_ratio"] <= 0.40, 0.5),
+                (lambda r, d: r.get("current_liability_ratio") is not None and r["current_liability_ratio"] > 0.70, -0.5),
+            ],
+            label="Liability Management",
         )
-
-        return result
 
     def revenue_predictability_analysis(self, data: FinancialData) -> RevenuePredictabilityResult:
         """Phase 142: Revenue Predictability Analysis."""
-        result = RevenuePredictabilityResult()
-
-        rev = data.revenue
-        ta = data.total_assets
-        te = data.total_equity
-        td = data.total_debt
-        gp = data.gross_profit
-        oi = data.operating_income
-        ni = data.net_income
-
-        result.revenue_to_assets = safe_divide(rev, ta)
-        result.revenue_to_equity = safe_divide(rev, te)
-        result.revenue_to_debt = safe_divide(rev, td)
-        result.gross_margin = safe_divide(gp, rev)
-        result.operating_margin = safe_divide(oi, rev)
-        result.net_margin = safe_divide(ni, rev)
-
-        # Scoring on Operating Margin
-        om = result.operating_margin
-        if om is not None:
-            if om >= 0.30:
-                score = 10.0
-            elif om >= 0.25:
-                score = 8.5
-            elif om >= 0.20:
-                score = 7.0
-            elif om >= 0.15:
-                score = 5.5
-            elif om >= 0.10:
-                score = 4.0
-            elif om >= 0.05:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: Gross Margin
-            gm = result.gross_margin
-            if gm is not None:
-                if gm >= 0.50:
-                    score += 0.5
-                elif gm < 0.20:
-                    score -= 0.5
-
-            # Adjustment: Net Margin
-            nm = result.net_margin
-            if nm is not None:
-                if nm >= 0.15:
-                    score += 0.5
-                elif nm < 0.03:
-                    score -= 0.5
-
-            result.rp_score = max(0.0, min(10.0, round(score, 2)))
-        else:
-            result.rp_score = 0.0
-
-        if result.rp_score >= 8:
-            result.rp_grade = "Excellent"
-        elif result.rp_score >= 6:
-            result.rp_grade = "Good"
-        elif result.rp_score >= 4:
-            result.rp_grade = "Adequate"
-        else:
-            result.rp_grade = "Weak"
-
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Revenue Predictability — Grade: {result.rp_grade} ({result.rp_score}/10). "
-            f"Op Margin={_pct(result.operating_margin)}, "
-            f"Gross Margin={_pct(result.gross_margin)}, "
-            f"Net Margin={_pct(result.net_margin)}, "
-            f"Rev/Assets={_r2(result.revenue_to_assets)}."
+        return self._scored_analysis(
+            data=data, result_class=RevenuePredictabilityResult,
+            ratio_defs=[
+                ("revenue_to_assets", "revenue", "total_assets"),
+                ("revenue_to_equity", "revenue", "total_equity"),
+                ("revenue_to_debt", "revenue", "total_debt"),
+                ("gross_margin", "gross_profit", "revenue"),
+                ("operating_margin", "operating_income", "revenue"),
+                ("net_margin", "net_income", "revenue"),
+            ],
+            score_field="rp_score", grade_field="rp_grade",
+            primary="operating_margin", higher_is_better=True,
+            thresholds=[(0.30, 10.0), (0.25, 8.5), (0.20, 7.0), (0.15, 5.5), (0.10, 4.0), (0.05, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("gross_margin") is not None and r["gross_margin"] >= 0.50, 0.5),
+                (lambda r, d: r.get("gross_margin") is not None and r["gross_margin"] < 0.20, -0.5),
+                (lambda r, d: r.get("net_margin") is not None and r["net_margin"] >= 0.15, 0.5),
+                (lambda r, d: r.get("net_margin") is not None and r["net_margin"] < 0.03, -0.5),
+            ],
+            label="Revenue Predictability",
         )
-
-        return result
 
     def equity_reinvestment_analysis(self, data: FinancialData) -> EquityReinvestmentResult:
         """Phase 139: Equity Reinvestment Analysis."""
-        result = EquityReinvestmentResult()
-
-        ni = data.net_income
-        div = data.dividends_paid
-        capex = data.capex
-        re = data.retained_earnings
-        te = data.total_equity
-        ta = data.total_assets
-
-        # Retention ratio = (NI - Div) / NI
-        if ni is not None and div is not None:
-            retained = ni - div
-            result.retention_ratio = safe_divide(retained, ni)
-            result.plowback_to_assets = safe_divide(retained, ta)
-        else:
-            result.retention_ratio = safe_divide(ni, ni) if ni is not None and div is None else None
-
-        result.reinvestment_rate = safe_divide(capex, ni)
-        result.equity_growth_proxy = safe_divide(re, te)
-        result.dividend_coverage = safe_divide(ni, div)
-
-        # Internal growth rate = (RE/TE) * (NI/TE)
-        egp = result.equity_growth_proxy
-        roe = safe_divide(ni, te)
-        if egp is not None and roe is not None:
-            result.internal_growth_rate = egp * roe
-        else:
-            result.internal_growth_rate = None
-
-        # Scoring on Retention Ratio
-        rr = result.retention_ratio
-        if rr is not None:
-            if rr >= 0.90:
-                score = 10.0
-            elif rr >= 0.80:
-                score = 8.5
-            elif rr >= 0.70:
-                score = 7.0
-            elif rr >= 0.60:
-                score = 5.5
-            elif rr >= 0.50:
-                score = 4.0
-            elif rr >= 0.30:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: Dividend Coverage
-            dc = result.dividend_coverage
-            if dc is not None:
-                if dc >= 3.0:
-                    score += 0.5
-                elif dc < 1.0:
-                    score -= 0.5
-
-            # Adjustment: Equity Growth Proxy
-            if egp is not None:
-                if egp >= 0.50:
-                    score += 0.5
-                elif egp < 0.20:
-                    score -= 0.5
-
-            result.er_score = max(0.0, min(10.0, round(score, 2)))
-        else:
-            result.er_score = 0.0
-
-        if result.er_score >= 8:
-            result.er_grade = "Excellent"
-        elif result.er_score >= 6:
-            result.er_grade = "Good"
-        elif result.er_score >= 4:
-            result.er_grade = "Adequate"
-        else:
-            result.er_grade = "Weak"
-
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Equity Reinvestment — Grade: {result.er_grade} ({result.er_score}/10). "
-            f"Retention Ratio={_pct(result.retention_ratio)}, "
-            f"Reinvestment Rate={_pct(result.reinvestment_rate)}, "
-            f"Equity Growth Proxy={_pct(result.equity_growth_proxy)}, "
-            f"Div Coverage={_r2(result.dividend_coverage)}."
+        return self._scored_analysis(
+            data=data, result_class=EquityReinvestmentResult,
+            ratio_defs=[
+                ("reinvestment_rate", "capex", "net_income"),
+                ("equity_growth_proxy", "retained_earnings", "total_equity"),
+                ("dividend_coverage", "net_income", "dividends_paid"),
+            ],
+            derived=[
+                ("retention_ratio", lambda r, d: (
+                    safe_divide(d.net_income - d.dividends_paid, d.net_income)
+                    if d.net_income is not None and d.dividends_paid is not None
+                    else (safe_divide(d.net_income, d.net_income) if d.net_income is not None else None)
+                )),
+                ("plowback_to_assets", lambda r, d: (
+                    safe_divide(d.net_income - d.dividends_paid, d.total_assets)
+                    if d.net_income is not None and d.dividends_paid is not None else None
+                )),
+                ("internal_growth_rate", lambda r, d: (
+                    r["equity_growth_proxy"] * safe_divide(d.net_income, d.total_equity)
+                    if r.get("equity_growth_proxy") is not None
+                    and safe_divide(d.net_income, d.total_equity) is not None else None
+                )),
+            ],
+            score_field="er_score", grade_field="er_grade",
+            primary="retention_ratio", higher_is_better=True,
+            thresholds=[(0.90, 10.0), (0.80, 8.5), (0.70, 7.0), (0.60, 5.5), (0.50, 4.0), (0.30, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("dividend_coverage") is not None and r["dividend_coverage"] >= 3.0, 0.5),
+                (lambda r, d: r.get("dividend_coverage") is not None and r["dividend_coverage"] < 1.0, -0.5),
+                (lambda r, d: r.get("equity_growth_proxy") is not None and r["equity_growth_proxy"] >= 0.50, 0.5),
+                (lambda r, d: r.get("equity_growth_proxy") is not None and r["equity_growth_proxy"] < 0.20, -0.5),
+            ],
+            label="Equity Reinvestment",
         )
-
-        return result
 
     def fixed_asset_efficiency_analysis(self, data: FinancialData) -> FixedAssetEfficiencyResult:
         """Phase 138: Fixed Asset Efficiency Analysis."""
-        result = FixedAssetEfficiencyResult()
+        def _fa(d):
+            return (d.total_assets - d.current_assets) if d.total_assets is not None and d.current_assets is not None else None
 
-        ta = data.total_assets
-        ca = data.current_assets
-        rev = data.revenue
-        te = data.total_equity
-        dep = data.depreciation
-        capex = data.capex
-
-        # Fixed assets = total assets - current assets
-        if ta is not None and ca is not None:
-            fa = ta - ca
-        else:
-            fa = None
-
-        result.fixed_asset_ratio = safe_divide(fa, ta)
-        result.fixed_asset_turnover = safe_divide(rev, fa)
-        result.fixed_to_equity = safe_divide(fa, te)
-        result.fixed_asset_coverage = safe_divide(te, fa)
-        result.depreciation_to_fixed = safe_divide(dep, fa)
-        result.capex_to_fixed = safe_divide(capex, fa)
-
-        # Scoring on Fixed Asset Turnover
-        fat = result.fixed_asset_turnover
-        if fat is not None:
-            if fat >= 5.0:
-                score = 10.0
-            elif fat >= 3.0:
-                score = 8.5
-            elif fat >= 2.0:
-                score = 7.0
-            elif fat >= 1.5:
-                score = 5.5
-            elif fat >= 1.0:
-                score = 4.0
-            elif fat >= 0.5:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: CapEx to Fixed (reinvestment)
-            ctf = result.capex_to_fixed
-            if ctf is not None:
-                if ctf >= 0.10:
-                    score += 0.5
-                elif ctf < 0.02:
-                    score -= 0.5
-
-            # Adjustment: Fixed Asset Coverage
-            fac = result.fixed_asset_coverage
-            if fac is not None:
-                if fac >= 1.0:
-                    score += 0.5
-                elif fac < 0.3:
-                    score -= 0.5
-
-            result.fae_score = max(0.0, min(10.0, round(score, 2)))
-        else:
-            result.fae_score = 0.0
-
-        if result.fae_score >= 8:
-            result.fae_grade = "Excellent"
-        elif result.fae_score >= 6:
-            result.fae_grade = "Good"
-        elif result.fae_score >= 4:
-            result.fae_grade = "Adequate"
-        else:
-            result.fae_grade = "Weak"
-
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Fixed Asset Efficiency — Grade: {result.fae_grade} ({result.fae_score}/10). "
-            f"FA Ratio={_pct(result.fixed_asset_ratio)}, "
-            f"FA Turnover={_r2(result.fixed_asset_turnover)}, "
-            f"FA Coverage={_r2(result.fixed_asset_coverage)}, "
-            f"CapEx/FA={_pct(result.capex_to_fixed)}."
+        return self._scored_analysis(
+            data=data, result_class=FixedAssetEfficiencyResult,
+            ratio_defs=[],
+            derived=[
+                ("fixed_asset_ratio", lambda r, d: safe_divide(_fa(d), d.total_assets)),
+                ("fixed_asset_turnover", lambda r, d: safe_divide(d.revenue, _fa(d))),
+                ("fixed_to_equity", lambda r, d: safe_divide(_fa(d), d.total_equity)),
+                ("fixed_asset_coverage", lambda r, d: safe_divide(d.total_equity, _fa(d))),
+                ("depreciation_to_fixed", lambda r, d: safe_divide(d.depreciation, _fa(d))),
+                ("capex_to_fixed", lambda r, d: safe_divide(d.capex, _fa(d))),
+            ],
+            score_field="fae_score", grade_field="fae_grade",
+            primary="fixed_asset_turnover", higher_is_better=True,
+            thresholds=[(5.0, 10.0), (3.0, 8.5), (2.0, 7.0), (1.5, 5.5), (1.0, 4.0), (0.5, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("capex_to_fixed") is not None and r["capex_to_fixed"] >= 0.10, 0.5),
+                (lambda r, d: r.get("capex_to_fixed") is not None and r["capex_to_fixed"] < 0.02, -0.5),
+                (lambda r, d: r.get("fixed_asset_coverage") is not None and r["fixed_asset_coverage"] >= 1.0, 0.5),
+                (lambda r, d: r.get("fixed_asset_coverage") is not None and r["fixed_asset_coverage"] < 0.3, -0.5),
+            ],
+            label="Fixed Asset Efficiency",
         )
-
-        return result
 
     def income_stability_analysis(self, data: FinancialData) -> IncomeStabilityResult:
-        """Phase 134: Income Stability Analysis.
-
-        Metrics:
-            - Net Income Margin = NI / Revenue
-            - Retained Earnings Ratio = RE / TA
-            - Operating Income Cushion = OI / IE
-            - Net-to-Gross Ratio = NI / GP
-            - EBITDA Margin = EBITDA / Revenue
-            - Income Resilience = OCF / NI
-        Scoring on Operating Income Cushion (OI / IE).
-        """
-        result = IncomeStabilityResult()
-
-        ni_margin = safe_divide(data.net_income, data.revenue)
-        result.net_income_margin = ni_margin
-
-        re_ratio = safe_divide(data.retained_earnings, data.total_assets)
-        result.retained_earnings_ratio = re_ratio
-
-        oi_cushion = safe_divide(data.operating_income, data.interest_expense)
-        result.operating_income_cushion = oi_cushion
-
-        ntg = safe_divide(data.net_income, data.gross_profit)
-        result.net_to_gross_ratio = ntg
-
-        ebitda_m = safe_divide(data.ebitda, data.revenue)
-        result.ebitda_margin = ebitda_m
-
-        resilience = safe_divide(data.operating_cash_flow, data.net_income)
-        result.income_resilience = resilience
-
-        # --- Scoring on Operating Income Cushion ---
-        if oi_cushion is None:
-            result.is_score = 0.0
-            result.is_grade = "Weak"
-            result.summary = "Income Stability: Insufficient data."
-            return result
-
-        if oi_cushion >= 10.0:
-            score = 10.0
-        elif oi_cushion >= 7.0:
-            score = 8.5
-        elif oi_cushion >= 5.0:
-            score = 7.0
-        elif oi_cushion >= 3.0:
-            score = 5.5
-        elif oi_cushion >= 2.0:
-            score = 4.0
-        elif oi_cushion >= 1.0:
-            score = 2.5
-        else:
-            score = 1.0
-
-        # Adjustments
-        if ni_margin is not None:
-            if ni_margin >= 0.15:
-                score += 0.5
-            elif ni_margin < 0.02:
-                score -= 0.5
-
-        if resilience is not None:
-            if resilience >= 1.0:
-                score += 0.5
-            elif resilience < 0.5:
-                score -= 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.is_score = score
-
-        if score >= 8.0:
-            result.is_grade = "Excellent"
-        elif score >= 6.0:
-            result.is_grade = "Good"
-        elif score >= 4.0:
-            result.is_grade = "Adequate"
-        else:
-            result.is_grade = "Weak"
-
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Income Stability: OI Cushion {_r2(oi_cushion)}x, "
-            f"NI Margin {_pct(ni_margin)}, "
-            f"Resilience {_r2(resilience)}x — "
-            f"Score {score:.1f}/10 ({result.is_grade})"
+        """Phase 134: Income Stability Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=IncomeStabilityResult,
+            ratio_defs=[
+                ("net_income_margin", "net_income", "revenue"),
+                ("retained_earnings_ratio", "retained_earnings", "total_assets"),
+                ("operating_income_cushion", "operating_income", "interest_expense"),
+                ("net_to_gross_ratio", "net_income", "gross_profit"),
+                ("ebitda_margin", "ebitda", "revenue"),
+                ("income_resilience", "operating_cash_flow", "net_income"),
+            ],
+            score_field="is_score", grade_field="is_grade",
+            primary="operating_income_cushion", higher_is_better=True,
+            thresholds=[(10.0, 10.0), (7.0, 8.5), (5.0, 7.0), (3.0, 5.5), (2.0, 4.0), (1.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("net_income_margin") is not None and r["net_income_margin"] >= 0.15, 0.5),
+                (lambda r, d: r.get("net_income_margin") is not None and r["net_income_margin"] < 0.02, -0.5),
+                (lambda r, d: r.get("income_resilience") is not None and r["income_resilience"] >= 1.0, 0.5),
+                (lambda r, d: r.get("income_resilience") is not None and r["income_resilience"] < 0.5, -0.5),
+            ],
+            label="Income Stability",
         )
-
-        return result
 
     def defensive_posture_analysis(self, data: FinancialData) -> DefensivePostureResult:
-        """Phase 133: Defensive Posture Analysis.
-
-        Metrics:
-          - Defensive Interval = CA / (OpEx / 365)
-          - Cash Ratio = Cash / CL
-          - Quick Ratio = (CA - Inv) / CL
-          - Cash Flow Coverage = OCF / TA
-          - Equity Buffer = TE / TA
-          - Debt Shield = EBITDA / TD
-        """
-        result = DefensivePostureResult()
-
-        # Defensive Interval (days of coverage)
-        if data.operating_expenses is not None and data.operating_expenses > 0:
-            daily_opex = data.operating_expenses / 365
-            result.defensive_interval = safe_divide(data.current_assets, daily_opex)
-
-        # Cash Ratio
-        result.cash_ratio = safe_divide(data.cash, data.current_liabilities)
-
-        # Quick Ratio
-        ca = data.current_assets
-        inv = data.inventory or 0
-        if ca is not None and data.current_liabilities is not None and data.current_liabilities > 0:
-            result.quick_ratio = (ca - inv) / data.current_liabilities
-
-        # Cash Flow Coverage
-        result.cash_flow_coverage = safe_divide(data.operating_cash_flow, data.total_assets)
-
-        # Equity Buffer
-        result.equity_buffer = safe_divide(data.total_equity, data.total_assets)
-
-        # Debt Shield
-        result.debt_shield = safe_divide(data.ebitda, data.total_debt)
-
-        # --- Scoring on Defensive Interval ---
-        di = result.defensive_interval
-        if di is not None:
-            if di >= 365:
-                base = 10.0
-            elif di >= 270:
-                base = 8.5
-            elif di >= 180:
-                base = 7.0
-            elif di >= 120:
-                base = 5.5
-            elif di >= 90:
-                base = 4.0
-            elif di >= 30:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Cash Ratio
-            cr = result.cash_ratio
-            if cr is not None:
-                if cr >= 0.50:
-                    base += 0.5
-                elif cr < 0.10:
-                    base -= 0.5
-
-            # Adjustment: Debt Shield
-            ds = result.debt_shield
-            if ds is not None:
-                if ds >= 2.0:
-                    base += 0.5
-                elif ds < 0.5:
-                    base -= 0.5
-
-            result.dp_score = max(0.0, min(10.0, base))
-        else:
-            result.dp_score = 0.0
-
-        # Grade
-        s = result.dp_score
-        if s >= 8:
-            result.dp_grade = "Excellent"
-        elif s >= 6:
-            result.dp_grade = "Good"
-        elif s >= 4:
-            result.dp_grade = "Adequate"
-        else:
-            result.dp_grade = "Weak"
-
-        # Summary
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        _r0 = lambda v: f"{v:.0f}" if v is not None else "N/A"
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        result.summary = (
-            f"Defensive Posture — Score: {result.dp_score:.1f}/10 ({result.dp_grade}). "
-            f"Defensive Interval: {_r0(result.defensive_interval)} days. "
-            f"Cash Ratio: {_r2(result.cash_ratio)}. "
-            f"Quick Ratio: {_r2(result.quick_ratio)}. "
-            f"CF Coverage: {_pct(result.cash_flow_coverage)}. "
-            f"Equity Buffer: {_pct(result.equity_buffer)}. "
-            f"Debt Shield: {_r2(result.debt_shield)}x."
+        """Phase 133: Defensive Posture Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=DefensivePostureResult,
+            ratio_defs=[
+                ("cash_ratio", "cash", "current_liabilities"),
+                ("cash_flow_coverage", "operating_cash_flow", "total_assets"),
+                ("equity_buffer", "total_equity", "total_assets"),
+                ("debt_shield", "ebitda", "total_debt"),
+            ],
+            derived=[
+                ("defensive_interval", lambda r, d: (
+                    safe_divide(d.current_assets, d.operating_expenses / 365)
+                    if d.operating_expenses is not None and d.operating_expenses > 0 else None
+                )),
+                ("quick_ratio", lambda r, d: (
+                    (d.current_assets - (d.inventory or 0)) / d.current_liabilities
+                    if d.current_assets is not None and d.current_liabilities is not None
+                    and d.current_liabilities > 0 else None
+                )),
+            ],
+            score_field="dp_score", grade_field="dp_grade",
+            primary="defensive_interval", higher_is_better=True,
+            thresholds=[(365, 10.0), (270, 8.5), (180, 7.0), (120, 5.5), (90, 4.0), (30, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("cash_ratio") is not None and r["cash_ratio"] >= 0.50, 0.5),
+                (lambda r, d: r.get("cash_ratio") is not None and r["cash_ratio"] < 0.10, -0.5),
+                (lambda r, d: r.get("debt_shield") is not None and r["debt_shield"] >= 2.0, 0.5),
+                (lambda r, d: r.get("debt_shield") is not None and r["debt_shield"] < 0.5, -0.5),
+            ],
+            label="Defensive Posture",
         )
-
-        return result
 
     def funding_efficiency_analysis(self, data: FinancialData) -> FundingEfficiencyResult:
-        """Phase 131: Funding Efficiency Analysis.
-
-        Metrics:
-          - Debt-to-Capitalization = TD / (TD + TE)
-          - Equity Multiplier = TA / TE
-          - Interest Coverage (EBITDA) = EBITDA / IE
-          - Cost of Debt = IE / TD
-          - Weighted Funding Cost = CoD * (TD/(TD+TE))
-          - Funding Spread = ROA - Weighted Funding Cost
-        """
-        result = FundingEfficiencyResult()
-
-        # Debt-to-Capitalization
-        td = data.total_debt
-        te = data.total_equity
-        if td is not None and te is not None and (td + te) > 0:
-            result.debt_to_capitalization = td / (td + te)
-
-        # Equity Multiplier
-        result.equity_multiplier = safe_divide(data.total_assets, data.total_equity)
-
-        # Interest Coverage (EBITDA-based)
-        result.interest_coverage_ebitda = safe_divide(data.ebitda, data.interest_expense)
-
-        # Cost of Debt
-        cod = safe_divide(data.interest_expense, data.total_debt)
-        result.cost_of_debt = cod
-
-        # Weighted Funding Cost
-        if cod is not None and result.debt_to_capitalization is not None:
-            result.weighted_funding_cost = cod * result.debt_to_capitalization
-
-        # Funding Spread = ROA - Weighted Funding Cost
-        roa = safe_divide(data.net_income, data.total_assets)
-        if roa is not None and result.weighted_funding_cost is not None:
-            result.funding_spread = roa - result.weighted_funding_cost
-
-        # --- Scoring on Interest Coverage (EBITDA) ---
-        ic = result.interest_coverage_ebitda
-        if ic is not None:
-            if ic >= 10.0:
-                base = 10.0
-            elif ic >= 7.0:
-                base = 8.5
-            elif ic >= 5.0:
-                base = 7.0
-            elif ic >= 3.0:
-                base = 5.5
-            elif ic >= 2.0:
-                base = 4.0
-            elif ic >= 1.0:
-                base = 2.5
-            else:
-                base = 1.0
-
-            # Adjustment: Debt-to-Capitalization
-            dc = result.debt_to_capitalization
-            if dc is not None:
-                if dc <= 0.30:
-                    base += 0.5
-                elif dc > 0.60:
-                    base -= 0.5
-
-            # Adjustment: Funding Spread
-            fs = result.funding_spread
-            if fs is not None:
-                if fs >= 0.05:
-                    base += 0.5
-                elif fs < 0.0:
-                    base -= 0.5
-
-            result.fe_score = max(0.0, min(10.0, base))
-        else:
-            result.fe_score = 0.0
-
-        # Grade
-        s = result.fe_score
-        if s >= 8:
-            result.fe_grade = "Excellent"
-        elif s >= 6:
-            result.fe_grade = "Good"
-        elif s >= 4:
-            result.fe_grade = "Adequate"
-        else:
-            result.fe_grade = "Weak"
-
-        # Summary
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Funding Efficiency — Score: {result.fe_score:.1f}/10 ({result.fe_grade}). "
-            f"Debt/Cap: {_pct(result.debt_to_capitalization)}. "
-            f"Equity Multiplier: {_r2(result.equity_multiplier)}x. "
-            f"EBITDA Coverage: {_r2(result.interest_coverage_ebitda)}x. "
-            f"Cost of Debt: {_pct(result.cost_of_debt)}. "
-            f"Weighted Cost: {_pct(result.weighted_funding_cost)}. "
-            f"Funding Spread: {_pct(result.funding_spread)}."
+        """Phase 131: Funding Efficiency Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=FundingEfficiencyResult,
+            ratio_defs=[
+                ("equity_multiplier", "total_assets", "total_equity"),
+                ("interest_coverage_ebitda", "ebitda", "interest_expense"),
+                ("cost_of_debt", "interest_expense", "total_debt"),
+            ],
+            derived=[
+                ("debt_to_capitalization", lambda r, d: (
+                    d.total_debt / (d.total_debt + d.total_equity)
+                    if d.total_debt is not None and d.total_equity is not None
+                    and (d.total_debt + d.total_equity) > 0 else None
+                )),
+                ("weighted_funding_cost", lambda r, d: (
+                    r["cost_of_debt"] * r["debt_to_capitalization"]
+                    if r.get("cost_of_debt") is not None and r.get("debt_to_capitalization") is not None
+                    else None
+                )),
+                ("funding_spread", lambda r, d: (
+                    safe_divide(d.net_income, d.total_assets) - r["weighted_funding_cost"]
+                    if safe_divide(d.net_income, d.total_assets) is not None
+                    and r.get("weighted_funding_cost") is not None else None
+                )),
+            ],
+            score_field="fe_score", grade_field="fe_grade",
+            primary="interest_coverage_ebitda", higher_is_better=True,
+            thresholds=[(10.0, 10.0), (7.0, 8.5), (5.0, 7.0), (3.0, 5.5), (2.0, 4.0), (1.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("debt_to_capitalization") is not None and r["debt_to_capitalization"] <= 0.30, 0.5),
+                (lambda r, d: r.get("debt_to_capitalization") is not None and r["debt_to_capitalization"] > 0.60, -0.5),
+                (lambda r, d: r.get("funding_spread") is not None and r["funding_spread"] >= 0.05, 0.5),
+                (lambda r, d: r.get("funding_spread") is not None and r["funding_spread"] < 0.0, -0.5),
+            ],
+            label="Funding Efficiency",
         )
-
-        return result
 
     def cash_flow_stability_analysis(self, data: FinancialData) -> CashFlowStabilityResult:
-        """Phase 125: Cash Flow Stability Analysis.
-
-        Metrics:
-        - OCF Margin = OCF / Revenue
-        - OCF/EBITDA = Operating Cash Flow / EBITDA
-        - OCF/Debt Service = OCF / (Interest Expense + Debt Repayment)
-        - CapEx/OCF = CapEx / OCF
-        - Dividend Coverage = OCF / Dividends
-        - Cash Flow Sufficiency = OCF / (CapEx + Dividends + Interest)
-        """
-        result = CashFlowStabilityResult()
-
-        ocf = getattr(data, "operating_cash_flow", None)
-        revenue = getattr(data, "revenue", None)
-        ebitda = getattr(data, "ebitda", None)
-        interest_expense = getattr(data, "interest_expense", None)
-        capex = getattr(data, "capex", None)
-        dividends = getattr(data, "dividends_paid", None)
-
-        has_ocf = ocf is not None and ocf > 0
-        has_rev = revenue is not None and revenue > 0
-
-        # OCF Margin = OCF / Revenue
-        if ocf is not None and has_rev:
-            result.ocf_margin = safe_divide(ocf, revenue)
-
-        # OCF / EBITDA
-        if ocf is not None and ebitda is not None and ebitda > 0:
-            result.ocf_to_ebitda = safe_divide(ocf, ebitda)
-
-        # OCF / Debt Service (Interest)
-        if has_ocf and interest_expense is not None and interest_expense > 0:
-            result.ocf_to_debt_service = safe_divide(ocf, interest_expense)
-
-        # CapEx / OCF
-        if capex is not None and has_ocf:
-            result.capex_to_ocf = safe_divide(capex, ocf)
-
-        # Dividend Coverage = OCF / Dividends
-        if has_ocf and dividends is not None and dividends > 0:
-            result.dividend_coverage = safe_divide(ocf, dividends)
-
-        # Cash Flow Sufficiency = OCF / (CapEx + Dividends + Interest)
-        if has_ocf:
-            cap = capex if capex is not None else 0.0
-            div = dividends if dividends is not None else 0.0
-            ie = interest_expense if interest_expense is not None else 0.0
-            total_needs = cap + div + ie
-            if total_needs > 0:
-                result.cash_flow_sufficiency = safe_divide(ocf, total_needs)
-
-        # --- Scoring based on OCF Margin ---
-        om = result.ocf_margin
-        if om is not None:
-            if om >= 0.25:
-                score = 10.0
-            elif om >= 0.20:
-                score = 8.5
-            elif om >= 0.15:
-                score = 7.0
-            elif om >= 0.10:
-                score = 5.5
-            elif om >= 0.05:
-                score = 4.0
-            elif om >= 0.0:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: OCF/EBITDA
-            oe = result.ocf_to_ebitda
-            if oe is not None:
-                if oe >= 0.90:
-                    score += 0.5
-                elif oe < 0.50:
-                    score -= 0.5
-
-            # Adjustment: Cash Flow Sufficiency
-            cfs = result.cash_flow_sufficiency
-            if cfs is not None:
-                if cfs >= 1.5:
-                    score += 0.5
-                elif cfs < 1.0:
-                    score -= 0.5
-
-            score = max(0.0, min(10.0, score))
-            result.cfs_score = round(score, 1)
-        else:
-            result.cfs_score = 0.0
-
-        # Grade
-        s = result.cfs_score
-        if s >= 8.0:
-            result.cfs_grade = "Excellent"
-        elif s >= 6.0:
-            result.cfs_grade = "Good"
-        elif s >= 4.0:
-            result.cfs_grade = "Adequate"
-        else:
-            result.cfs_grade = "Weak"
-
-        # Summary
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        result.summary = (
-            f"Cash Flow Stability: OCF Margin={_pct(result.ocf_margin)}, "
-            f"OCF/EBITDA={_r2(result.ocf_to_ebitda)}, "
-            f"Sufficiency={_r2(result.cash_flow_sufficiency)} | "
-            f"Score: {result.cfs_score}/10 ({result.cfs_grade})"
+        """Phase 125: Cash Flow Stability Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=CashFlowStabilityResult,
+            ratio_defs=[
+                ("ocf_margin", "operating_cash_flow", "revenue"),
+                ("ocf_to_ebitda", "operating_cash_flow", "ebitda"),
+                ("ocf_to_debt_service", "operating_cash_flow", "interest_expense"),
+                ("capex_to_ocf", "capex", "operating_cash_flow"),
+                ("dividend_coverage", "operating_cash_flow", "dividends_paid"),
+            ],
+            derived=[
+                ("cash_flow_sufficiency", lambda r, d: (
+                    safe_divide(d.operating_cash_flow,
+                                (d.capex or 0.0) + (d.dividends_paid or 0.0) + (d.interest_expense or 0.0))
+                    if d.operating_cash_flow is not None and d.operating_cash_flow > 0
+                    and ((d.capex or 0.0) + (d.dividends_paid or 0.0) + (d.interest_expense or 0.0)) > 0
+                    else None
+                )),
+            ],
+            score_field="cfs_score", grade_field="cfs_grade",
+            primary="ocf_margin", higher_is_better=True,
+            thresholds=[(0.25, 10.0), (0.20, 8.5), (0.15, 7.0), (0.10, 5.5), (0.05, 4.0), (0.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("ocf_to_ebitda") is not None and r["ocf_to_ebitda"] >= 0.90, 0.5),
+                (lambda r, d: r.get("ocf_to_ebitda") is not None and r["ocf_to_ebitda"] < 0.50, -0.5),
+                (lambda r, d: r.get("cash_flow_sufficiency") is not None and r["cash_flow_sufficiency"] >= 1.5, 0.5),
+                (lambda r, d: r.get("cash_flow_sufficiency") is not None and r["cash_flow_sufficiency"] < 1.0, -0.5),
+            ],
+            label="Cash Flow Stability",
         )
-
-        return result
 
     def income_quality_analysis(self, data: FinancialData) -> IncomeQualityResult:
-        """Phase 124: Income Quality Analysis.
-
-        Metrics:
-        - OCF/Net Income = Operating Cash Flow / Net Income
-        - Accruals Ratio = (Net Income - OCF) / Total Assets
-        - Cash Earnings Ratio = OCF / EBITDA
-        - Non-Cash Ratio = Depreciation / Net Income
-        - Earnings Persistence = Operating Income / Revenue
-        - Operating Income Ratio = Operating Income / Net Income
-        """
-        result = IncomeQualityResult()
-
-        ocf = getattr(data, "operating_cash_flow", None)
-        net_income = getattr(data, "net_income", None)
-        total_assets = getattr(data, "total_assets", None)
-        ebitda = getattr(data, "ebitda", None)
-        depreciation = getattr(data, "depreciation", None)
-        operating_income = getattr(data, "operating_income", None)
-        revenue = getattr(data, "revenue", None)
-
-        has_ni = net_income is not None and net_income > 0
-        has_rev = revenue is not None and revenue > 0
-
-        # OCF / Net Income
-        if ocf is not None and has_ni:
-            result.ocf_to_net_income = safe_divide(ocf, net_income)
-
-        # Accruals Ratio = (NI - OCF) / TA
-        if has_ni and ocf is not None and total_assets is not None and total_assets > 0:
-            result.accruals_ratio = safe_divide(net_income - ocf, total_assets)
-
-        # Cash Earnings Ratio = OCF / EBITDA
-        if ocf is not None and ebitda is not None and ebitda > 0:
-            result.cash_earnings_ratio = safe_divide(ocf, ebitda)
-
-        # Non-Cash Ratio = Depreciation / NI
-        if depreciation is not None and has_ni:
-            result.non_cash_ratio = safe_divide(depreciation, net_income)
-
-        # Earnings Persistence = OI / Revenue
-        if operating_income is not None and has_rev:
-            result.earnings_persistence = safe_divide(operating_income, revenue)
-
-        # Operating Income Ratio = OI / NI
-        if operating_income is not None and has_ni:
-            result.operating_income_ratio = safe_divide(operating_income, net_income)
-
-        # --- Scoring based on OCF/NI ---
-        ocf_ni = result.ocf_to_net_income
-        if ocf_ni is not None:
-            if ocf_ni >= 1.5:
-                score = 10.0
-            elif ocf_ni >= 1.2:
-                score = 8.5
-            elif ocf_ni >= 1.0:
-                score = 7.0
-            elif ocf_ni >= 0.8:
-                score = 5.5
-            elif ocf_ni >= 0.5:
-                score = 4.0
-            elif ocf_ni >= 0.0:
-                score = 2.5
-            else:
-                score = 1.0
-
-            # Adjustment: Accruals Ratio
-            ar = result.accruals_ratio
-            if ar is not None:
-                if ar <= -0.05:
-                    score += 0.5
-                elif ar > 0.10:
-                    score -= 0.5
-
-            # Adjustment: Cash Earnings Ratio
-            cer = result.cash_earnings_ratio
-            if cer is not None:
-                if cer >= 0.90:
-                    score += 0.5
-                elif cer < 0.50:
-                    score -= 0.5
-
-            score = max(0.0, min(10.0, score))
-            result.iq_score = round(score, 1)
-        else:
-            result.iq_score = 0.0
-
-        # Grade
-        s = result.iq_score
-        if s >= 8.0:
-            result.iq_grade = "Excellent"
-        elif s >= 6.0:
-            result.iq_grade = "Good"
-        elif s >= 4.0:
-            result.iq_grade = "Adequate"
-        else:
-            result.iq_grade = "Weak"
-
-        # Summary
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
-        result.summary = (
-            f"Income Quality: OCF/NI={_r2(result.ocf_to_net_income)}, "
-            f"Accruals={_pct(result.accruals_ratio)}, "
-            f"Cash Earnings={_r2(result.cash_earnings_ratio)} | "
-            f"Score: {result.iq_score}/10 ({result.iq_grade})"
+        """Phase 124: Income Quality Analysis."""
+        return self._scored_analysis(
+            data=data, result_class=IncomeQualityResult,
+            ratio_defs=[
+                ("ocf_to_net_income", "operating_cash_flow", "net_income"),
+                ("cash_earnings_ratio", "operating_cash_flow", "ebitda"),
+                ("non_cash_ratio", "depreciation", "net_income"),
+                ("earnings_persistence", "operating_income", "revenue"),
+                ("operating_income_ratio", "operating_income", "net_income"),
+            ],
+            derived=[
+                ("accruals_ratio", lambda r, d: (
+                    safe_divide((d.net_income or 0) - (d.operating_cash_flow or 0), d.total_assets)
+                    if d.net_income is not None and d.net_income > 0
+                    and d.operating_cash_flow is not None
+                    and d.total_assets is not None and d.total_assets > 0 else None
+                )),
+            ],
+            score_field="iq_score", grade_field="iq_grade",
+            primary="ocf_to_net_income", higher_is_better=True,
+            thresholds=[(1.5, 10.0), (1.2, 8.5), (1.0, 7.0), (0.8, 5.5), (0.5, 4.0), (0.0, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("accruals_ratio") is not None and r["accruals_ratio"] <= -0.05, 0.5),
+                (lambda r, d: r.get("accruals_ratio") is not None and r["accruals_ratio"] > 0.10, -0.5),
+                (lambda r, d: r.get("cash_earnings_ratio") is not None and r["cash_earnings_ratio"] >= 0.90, 0.5),
+                (lambda r, d: r.get("cash_earnings_ratio") is not None and r["cash_earnings_ratio"] < 0.50, -0.5),
+            ],
+            label="Income Quality",
         )
-
-        return result
 
     def receivables_management_analysis(self, data: FinancialData) -> ReceivablesManagementResult:
         """Phase 114: Receivables Management Analysis."""
         result = ReceivablesManagementResult()
-
-        rev = data.revenue
-        ar = data.accounts_receivable
-        ca = data.current_assets
-        ni = data.net_income or 0
-
-        if not rev or not ar:
+        if not data.revenue or not data.accounts_receivable:
             return result
-
-        # DSO = AR / Revenue * 365
-        result.dso = safe_divide(ar * 365, rev)
-
-        # AR / Revenue
-        result.ar_to_revenue = safe_divide(ar, rev)
-
-        # AR / Current Assets
-        result.ar_to_current_assets = safe_divide(ar, ca) if ca else None
-
-        # Receivables Turnover = Revenue / AR
-        result.receivables_turnover = safe_divide(rev, ar)
-
-        # Collection Effectiveness = (Rev - AR ending) / Rev
-        result.collection_effectiveness = safe_divide(rev - ar, rev)
-
-        # AR Concentration = AR / (AR + Cash)
-        cash = data.cash or 0
-        denom_arc = ar + cash
-        result.ar_concentration = safe_divide(ar, denom_arc) if denom_arc else None
-
-        # Scoring on DSO
-        dso = result.dso
-        if dso is not None:
-            if dso <= 30:
-                score = 10.0
-            elif dso <= 45:
-                score = 8.5
-            elif dso <= 60:
-                score = 7.0
-            elif dso <= 75:
-                score = 5.5
-            elif dso <= 90:
-                score = 4.0
-            elif dso <= 120:
-                score = 2.5
-            else:
-                score = 1.0
-        else:
-            return result
-
-        # Adjustments
-        rt = result.receivables_turnover
-        if rt is not None:
-            if rt >= 12:
-                score += 0.5
-            elif rt < 4:
-                score -= 0.5
-
-        ce = result.collection_effectiveness
-        if ce is not None:
-            if ce >= 0.90:
-                score += 0.5
-            elif ce < 0.70:
-                score -= 0.5
-
-        score = max(0.0, min(10.0, score))
-        result.rm_score = score
-
-        if score >= 8:
-            result.rm_grade = "Excellent"
-        elif score >= 6:
-            result.rm_grade = "Good"
-        elif score >= 4:
-            result.rm_grade = "Adequate"
-        else:
-            result.rm_grade = "Weak"
-
-        _r2 = lambda v: f"{v:.2f}" if v is not None else "N/A"
-        _d = lambda v: f"{v:.1f}" if v is not None else "N/A"
-        result.summary = (
-            f"Receivables Management: DSO={_d(result.dso)} days, "
-            f"AR/Rev={_r2(result.ar_to_revenue)}, "
-            f"Turnover={_r2(result.receivables_turnover)}. "
-            f"Grade: {result.rm_grade}."
+        return self._scored_analysis(
+            data=data, result_class=ReceivablesManagementResult,
+            ratio_defs=[
+                ("ar_to_revenue", "accounts_receivable", "revenue"),
+                ("ar_to_current_assets", "accounts_receivable", "current_assets"),
+                ("receivables_turnover", "revenue", "accounts_receivable"),
+            ],
+            derived=[
+                ("dso", lambda r, d: safe_divide(d.accounts_receivable * 365, d.revenue)
+                    if d.accounts_receivable is not None and d.revenue is not None else None),
+                ("collection_effectiveness", lambda r, d: safe_divide(d.revenue - d.accounts_receivable, d.revenue)
+                    if d.revenue is not None and d.accounts_receivable is not None else None),
+                ("ar_concentration", lambda r, d: (
+                    safe_divide(d.accounts_receivable, d.accounts_receivable + (d.cash or 0))
+                    if d.accounts_receivable is not None and (d.accounts_receivable + (d.cash or 0)) > 0 else None
+                )),
+            ],
+            score_field="rm_score", grade_field="rm_grade",
+            primary="dso", higher_is_better=False,
+            thresholds=[(30, 10.0), (45, 8.5), (60, 7.0), (75, 5.5), (90, 4.0), (120, 2.5)],
+            adjustments=[
+                (lambda r, d: r.get("receivables_turnover") is not None and r["receivables_turnover"] >= 12, 0.5),
+                (lambda r, d: r.get("receivables_turnover") is not None and r["receivables_turnover"] < 4, -0.5),
+                (lambda r, d: r.get("collection_effectiveness") is not None and r["collection_effectiveness"] >= 0.90, 0.5),
+                (lambda r, d: r.get("collection_effectiveness") is not None and r["collection_effectiveness"] < 0.70, -0.5),
+            ],
+            label="Receivables Management",
         )
-
-        return result
 
     def solvency_depth_analysis(self, data: FinancialData) -> SolvencyDepthResult:
         """Phase 109: Solvency Depth Analysis."""

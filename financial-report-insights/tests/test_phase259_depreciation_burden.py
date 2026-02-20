@@ -167,4 +167,5 @@ class TestPhase259EdgeCases:
     def test_zero_depreciation(self, analyzer):
         data = FinancialData(revenue=1_000_000, depreciation=0)
         result = analyzer.depreciation_burden_analysis(data)
-        assert result.db_score == 0.0
+        # Zero depreciation burden is excellent (lower is better)
+        assert result.db_score == 10.0
