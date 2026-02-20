@@ -218,3 +218,172 @@ class TestSimpleRAGGraphIntegration:
             from graph_store import Neo4jStore
             store = Neo4jStore.connect()
             assert store is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Graph-enhanced retrieval wiring tests
+# ---------------------------------------------------------------------------
+
+
+class TestNeo4jStoreLineItems:
+    """Phase 2: FinancialStatement + LineItem node creation."""
+
+    def test_store_line_items_creates_nodes(self, store, mock_driver):
+        _, session = mock_driver
+        from financial_analyzer import FinancialData
+        fd = FinancialData(revenue=1_000_000, net_income=200_000, total_assets=5_000_000)
+        period_id = "test_period_hash"
+        count = store.store_line_items(fd, period_id)
+        assert count >= 3  # revenue, net_income, total_assets at minimum
+        assert session.run.call_count >= 2  # at least 1 statement + 1 batch
+
+    def test_store_line_items_skips_none_values(self, store, mock_driver):
+        _, session = mock_driver
+        from financial_analyzer import FinancialData
+        fd = FinancialData(revenue=100)  # Only revenue set, rest None
+        count = store.store_line_items(fd, "p1")
+        assert count == 1  # Only revenue stored
+
+    def test_store_line_items_handles_failure(self, store, mock_driver):
+        _, session = mock_driver
+        session.run.side_effect = Exception("Neo4j down")
+        from financial_analyzer import FinancialData
+        fd = FinancialData(revenue=100, total_assets=500)
+        count = store.store_line_items(fd, "p1")
+        assert count == 0
+
+
+class TestNeo4jStoreDerivedFromEdges:
+    """Phase 2: DERIVED_FROM edge creation from RATIO_CATALOG."""
+
+    def test_store_derived_from_edges_links_ratios(self, store, mock_driver):
+        _, session = mock_driver
+        # Use a known period_id that matches the hashing scheme
+        import hashlib
+        period_id = "test_period_id"
+        count = store.store_derived_from_edges(period_id)
+        # Should create edges for all catalog ratios that have matching fields
+        assert count > 0
+        session.run.assert_called_once()
+
+    def test_store_derived_from_edges_handles_failure(self, store, mock_driver):
+        _, session = mock_driver
+        session.run.side_effect = Exception("Neo4j down")
+        count = store.store_derived_from_edges("p1")
+        assert count == 0
+
+
+class TestNeo4jStorePeriodLabelReads:
+    """Phase 2/3: Period-label-based read methods."""
+
+    def test_ratios_by_period_label(self, store, mock_driver):
+        _, session = mock_driver
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter([
+            {"name": "current_ratio", "value": 2.1, "category": "liquidity"},
+        ]))
+        session.run.return_value = mock_result
+        results = store.ratios_by_period_label("FY2024")
+        assert len(results) == 1
+        assert results[0]["name"] == "current_ratio"
+
+    def test_scores_by_period_label(self, store, mock_driver):
+        _, session = mock_driver
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter([
+            {"model": "altman_z", "value": 3.2, "grade": "Safe", "interpretation": "Low risk"},
+        ]))
+        session.run.return_value = mock_result
+        results = store.scores_by_period_label("FY2024")
+        assert len(results) == 1
+        assert results[0]["model"] == "altman_z"
+
+
+class TestSemanticSearchCallsGraphSearch:
+    """Verify _semantic_search uses graph_search when store is present."""
+
+    def test_semantic_search_calls_graph_search_when_store_present(self):
+        from app_local import SimpleRAG
+        mock_llm = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1] * 10
+        mock_store = MagicMock()
+        mock_store.graph_search.return_value = [
+            {
+                "chunk_id": "c1",
+                "content": "Revenue $1M",
+                "source": "report.pdf",
+                "score": 0.9,
+                "document": "report.pdf",
+                "period": "FY2024",
+                "ratios": [{"name": "current_ratio", "value": 2.0, "category": "liquidity"}],
+                "scores": [],
+            }
+        ]
+
+        rag = SimpleRAG.__new__(SimpleRAG)
+        rag.documents = [{"source": "report.pdf", "content": "Revenue $1M", "type": "pdf"}]
+        rag.embeddings = [[0.1] * 10]
+        rag._doc_matrix = None
+        rag._doc_norms = None
+        rag.embedder = mock_embedder
+        rag._graph_store = mock_store
+        rag._embedding_model_name = "test-model"
+
+        results = rag._semantic_search("What is the revenue?", top_k=3)
+        mock_store.graph_search.assert_called_once()
+        assert len(results) == 1
+        assert results[0]["_graph_context"]["period"] == "FY2024"
+
+    def test_graph_context_in_financial_prompt(self):
+        from app_local import SimpleRAG
+        rag = SimpleRAG.__new__(SimpleRAG)
+        rag._financial_analysis_cache = ""
+        rag._charlie_analyzer = MagicMock()
+
+        relevant_docs = [
+            {
+                "source": "r.pdf",
+                "content": "data",
+                "type": "unknown",
+                "_graph_context": {
+                    "document": "r.pdf",
+                    "period": "FY2024",
+                    "ratios": [{"name": "current_ratio", "value": 2.1, "category": "liquidity"}],
+                    "scores": [],
+                },
+            }
+        ]
+
+        prompt = rag._build_financial_prompt(
+            "What is the current ratio?", "context text", [], relevant_docs
+        )
+        assert "GRAPH-RETRIEVED FINANCIAL METRICS" in prompt
+        assert "current_ratio" in prompt
+        assert "FY2024" in prompt
+
+    def test_degrades_to_numpy_when_graph_empty(self):
+        """When graph_search returns empty, falls back to numpy."""
+        from app_local import SimpleRAG
+        import numpy as np
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1] * 10
+        mock_store = MagicMock()
+        mock_store.graph_search.return_value = []
+
+        rag = SimpleRAG.__new__(SimpleRAG)
+        rag.documents = [
+            {"source": "a.pdf", "content": "Revenue data", "type": "pdf"},
+        ]
+        rag.embeddings = [[0.1] * 10]
+        rag._doc_matrix = np.asarray([[0.1] * 10], dtype=np.float32)
+        rag._doc_norms = np.array([np.linalg.norm([0.1] * 10)])
+        rag.embedder = mock_embedder
+        rag._graph_store = mock_store
+        rag._embedding_model_name = "test-model"
+
+        results = rag._semantic_search("test query", top_k=1)
+        # Should have fallen through to numpy path
+        assert len(results) == 1
+        assert results[0]["source"] == "a.pdf"

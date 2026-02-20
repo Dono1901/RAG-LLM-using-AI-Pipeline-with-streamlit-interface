@@ -184,6 +184,175 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+# ---------------------------------------------------------------------------
+# Graph-specific endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class PeriodContext(BaseModel):
+    period_label: str
+    ratios: List[Dict[str, Any]]
+    scores: List[Dict[str, Any]]
+
+
+class RatioEntry(BaseModel):
+    name: str
+    value: Optional[float]
+    category: str
+
+
+def _require_graph_store():
+    """Return the graph store or raise 501."""
+    rag = _get_rag()
+    store = getattr(rag, "_graph_store", None)
+    if store is None:
+        raise HTTPException(status_code=501, detail="Graph store not configured (NEO4J_URI not set).")
+    return store
+
+
+@app.get("/graph/context/{period_label}", response_model=PeriodContext)
+async def graph_context(period_label: str):
+    """Return all ratios and scores for a fiscal period."""
+    store = _require_graph_store()
+    ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
+    scores = await asyncio.to_thread(store.scores_by_period_label, period_label)
+    return PeriodContext(period_label=period_label, ratios=ratios, scores=scores)
+
+
+@app.get("/graph/ratios/{period_label}", response_model=List[RatioEntry])
+async def graph_ratios(period_label: str, category: Optional[str] = None):
+    """Return ratios for a fiscal period with optional category filter."""
+    store = _require_graph_store()
+    ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
+    if category:
+        ratios = [r for r in ratios if r.get("category", "").lower() == category.lower()]
+    return [RatioEntry(name=r["name"], value=r.get("value"), category=r.get("category", "")) for r in ratios]
+
+
+# ---------------------------------------------------------------------------
+# Multi-document comparison (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class CompareRequest(BaseModel):
+    period_labels: List[str] = Field(..., min_length=2, max_length=10)
+
+
+class PeriodDelta(BaseModel):
+    ratio_name: str
+    periods: Dict[str, Optional[float]]
+    delta: Optional[float] = None
+
+
+class CompareResponse(BaseModel):
+    periods_compared: List[str]
+    improvements: List[str]
+    deteriorations: List[str]
+    deltas: List[PeriodDelta]
+    graph_trend_data: Optional[List[Dict[str, Any]]] = None
+    summary: str
+
+
+@app.post("/compare", response_model=CompareResponse)
+async def compare_periods(req: CompareRequest):
+    """Compare financial metrics across multiple fiscal periods."""
+    rag = _get_rag()
+    store = getattr(rag, "_graph_store", None)
+
+    graph_trend_data = None
+    deltas: List[PeriodDelta] = []
+    improvements: List[str] = []
+    deteriorations: List[str] = []
+
+    # Graph path: query cross-period trends
+    if store is not None:
+        try:
+            raw_trends = await asyncio.to_thread(
+                store.cross_period_ratio_trend, req.period_labels
+            )
+            if raw_trends:
+                graph_trend_data = raw_trends
+                # Build deltas from graph data
+                ratio_periods: Dict[str, Dict[str, Optional[float]]] = {}
+                for row in raw_trends:
+                    rname = row["ratio_name"]
+                    ratio_periods.setdefault(rname, {})
+                    ratio_periods[rname][row["period"]] = row.get("value")
+
+                for rname, periods in ratio_periods.items():
+                    values = [periods.get(p) for p in req.period_labels]
+                    first_val = next((v for v in values if v is not None), None)
+                    last_val = next((v for v in reversed(values) if v is not None), None)
+                    delta = (last_val - first_val) if first_val is not None and last_val is not None else None
+                    deltas.append(PeriodDelta(ratio_name=rname, periods=periods, delta=delta))
+                    if delta is not None:
+                        if delta > 0:
+                            improvements.append(f"{rname}: +{delta:.4f}")
+                        elif delta < 0:
+                            deteriorations.append(f"{rname}: {delta:.4f}")
+        except Exception as exc:
+            logger.debug("Graph comparison failed, using in-memory: %s", exc)
+
+    # In-memory fallback: use cached FinancialData
+    if not deltas:
+        period_data = getattr(rag, "_period_financial_data", {})
+        # Ensure financial analysis context is computed
+        if not period_data:
+            await asyncio.to_thread(rag._get_financial_analysis_context)
+            period_data = getattr(rag, "_period_financial_data", {})
+
+        if period_data and rag.charlie_analyzer:
+            try:
+                from ratio_framework import run_all_ratios
+                for label in req.period_labels:
+                    fd = period_data.get(label)
+                    if fd:
+                        results = run_all_ratios(fd)
+                        for key, result in results.items():
+                            if result.value is not None:
+                                found = False
+                                for d in deltas:
+                                    if d.ratio_name == result.name:
+                                        d.periods[label] = result.value
+                                        found = True
+                                        break
+                                if not found:
+                                    deltas.append(PeriodDelta(
+                                        ratio_name=result.name,
+                                        periods={label: result.value},
+                                    ))
+
+                # Compute deltas between first and last period
+                for d in deltas:
+                    values = [d.periods.get(p) for p in req.period_labels]
+                    first_val = next((v for v in values if v is not None), None)
+                    last_val = next((v for v in reversed(values) if v is not None), None)
+                    if first_val is not None and last_val is not None:
+                        d.delta = last_val - first_val
+                        if d.delta > 0:
+                            improvements.append(f"{d.ratio_name}: +{d.delta:.4f}")
+                        elif d.delta < 0:
+                            deteriorations.append(f"{d.ratio_name}: {d.delta:.4f}")
+            except Exception as exc:
+                logger.debug("In-memory comparison failed: %s", exc)
+
+    n_improvements = len(improvements)
+    n_deteriorations = len(deteriorations)
+    summary = (
+        f"Compared {len(req.period_labels)} periods: "
+        f"{n_improvements} improvements, {n_deteriorations} deteriorations."
+    )
+
+    return CompareResponse(
+        periods_compared=req.period_labels,
+        improvements=improvements,
+        deteriorations=deteriorations,
+        deltas=deltas,
+        graph_trend_data=graph_trend_data,
+        summary=summary,
+    )
+
+
 @app.get("/documents", response_model=List[DocumentInfo])
 async def list_documents():
     """List indexed document chunks."""

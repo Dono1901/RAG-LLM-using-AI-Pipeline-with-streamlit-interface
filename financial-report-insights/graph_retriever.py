@@ -171,3 +171,60 @@ def persist_analysis_to_graph(
         )
         logger.info("Persisted %d ratios and %d scores for %s/%s",
                      len(ratios), len(scores), doc_id, period_label)
+
+
+def persist_structured_analysis_to_graph(
+    store,
+    doc_id: str,
+    period_label: str,
+    financial_data=None,
+    ratio_results: Optional[Dict] = None,
+) -> None:
+    """Persist structured financial data directly (no text parsing).
+
+    Unlike persist_analysis_to_graph which parses report text, this function
+    accepts structured FinancialData and ratio results directly.
+
+    Args:
+        store: A Neo4jStore instance.
+        doc_id: Source document identifier.
+        period_label: Fiscal period label (e.g., "FY2024").
+        financial_data: FinancialData instance for line item population.
+        ratio_results: Dict from run_all_ratios() or similar structured output.
+    """
+    if not store:
+        return
+
+    import hashlib
+
+    period_id = hashlib.sha256(f"{doc_id}:{period_label}".encode()).hexdigest()
+
+    # Store ratios and scores via existing store_financial_data
+    ratios = {}
+    scores = {}
+
+    if ratio_results:
+        for key, result in ratio_results.items():
+            if hasattr(result, "value") and result.value is not None:
+                ratios[result.name] = {
+                    "value": result.value,
+                    "category": getattr(result, "category", "computed"),
+                }
+
+    if ratios:
+        store.store_financial_data(
+            doc_id=doc_id,
+            period_label=period_label,
+            ratios=ratios,
+            scores=scores,
+        )
+
+    # Store line items from FinancialData
+    if financial_data is not None:
+        store.store_line_items(financial_data, period_id)
+        store.store_derived_from_edges(period_id)
+
+    logger.info(
+        "Persisted structured analysis for %s/%s (%d ratios, line_items=%s)",
+        doc_id, period_label, len(ratios), financial_data is not None,
+    )

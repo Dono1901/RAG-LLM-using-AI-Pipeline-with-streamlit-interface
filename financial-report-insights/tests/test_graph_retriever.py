@@ -8,6 +8,7 @@ from graph_retriever import (
     format_graph_context,
     graph_enhanced_search,
     persist_analysis_to_graph,
+    persist_structured_analysis_to_graph,
 )
 
 
@@ -134,3 +135,68 @@ class TestPersistAnalysisToGraph:
         persist_analysis_to_graph(store, "doc.pdf", "FY2024", report)
         # Should still call store_financial_data (possibly with empty dicts)
         # or not call if no data extracted
+
+
+# ---------------------------------------------------------------------------
+# persist_structured_analysis_to_graph (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistStructuredAnalysis:
+    def test_structured_persist_with_financial_data(self):
+        from financial_analyzer import FinancialData
+        store = MagicMock()
+        fd = FinancialData(revenue=1_000_000, net_income=200_000, total_assets=5_000_000)
+
+        persist_structured_analysis_to_graph(
+            store, "doc.pdf", "FY2024", financial_data=fd, ratio_results=None,
+        )
+        # Should call store_line_items and store_derived_from_edges
+        store.store_line_items.assert_called_once()
+        store.store_derived_from_edges.assert_called_once()
+
+    def test_structured_persist_with_ratio_results(self):
+        store = MagicMock()
+        from ratio_framework import RatioResult
+        results = {
+            "roa": RatioResult(name="Return on Assets (ROA)", value=0.04, score=4.0, grade="Weak", summary=""),
+        }
+
+        persist_structured_analysis_to_graph(
+            store, "doc.pdf", "FY2024", financial_data=None, ratio_results=results,
+        )
+        store.store_financial_data.assert_called_once()
+        call_kwargs = store.store_financial_data.call_args
+        ratios = call_kwargs.kwargs.get("ratios") or call_kwargs[1].get("ratios", {})
+        assert "Return on Assets (ROA)" in ratios
+
+    def test_structured_persist_noop_when_store_is_none(self):
+        """Should not raise when store is None."""
+        persist_structured_analysis_to_graph(None, "doc.pdf", "FY2024")
+
+
+# ---------------------------------------------------------------------------
+# Neo4j health check (Phase 2D)
+# ---------------------------------------------------------------------------
+
+
+class TestNeo4jHealthCheck:
+    def test_returns_ok_when_not_configured(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("NEO4J_URI", None)
+            from healthcheck import check_neo4j_connection
+            result = check_neo4j_connection()
+            assert result["status"] == "ok"
+            assert "not configured" in result["detail"]
+
+    def test_returns_ok_when_connected(self):
+        from unittest.mock import patch
+        mock_store = MagicMock()
+        with patch.dict("os.environ", {"NEO4J_URI": "bolt://localhost:7687"}):
+            with patch("graph_store.Neo4jStore.connect", return_value=mock_store):
+                from healthcheck import check_neo4j_connection
+                result = check_neo4j_connection()
+                assert result["status"] == "ok"
+                mock_store.close.assert_called_once()

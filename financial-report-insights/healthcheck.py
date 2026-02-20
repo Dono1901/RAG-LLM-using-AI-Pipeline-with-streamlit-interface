@@ -65,6 +65,22 @@ def check_documents_folder(docs_path: str = "./documents") -> Dict[str, str]:
     return {"status": "ok", "detail": f"Documents folder ready ({file_count} files)"}
 
 
+def check_neo4j_connection() -> Dict[str, str]:
+    """Check Neo4j connectivity when configured."""
+    uri = os.environ.get("NEO4J_URI", "").strip()
+    if not uri:
+        return {"status": "ok", "detail": "Neo4j not configured (optional)"}
+    try:
+        from graph_store import Neo4jStore
+        store = Neo4jStore.connect()
+        if store:
+            store.close()
+            return {"status": "ok", "detail": f"Neo4j reachable at {uri}"}
+        return {"status": "warning", "detail": f"Neo4j configured but connection failed: {uri}"}
+    except Exception as e:
+        return {"status": "warning", "detail": f"Neo4j check error: {e}"}
+
+
 def check_cache_folders() -> Dict[str, str]:
     """Check if cache directories exist and are writable."""
     from config import settings
@@ -93,6 +109,7 @@ def run_preflight_checks() -> List[Dict[str, str]]:
         ("model_available", check_model_available(settings.llm_model, ollama_host)),
         ("documents_folder", check_documents_folder()),
         ("cache_folders", check_cache_folders()),
+        ("neo4j_connection", check_neo4j_connection()),
     ]
 
     results = []

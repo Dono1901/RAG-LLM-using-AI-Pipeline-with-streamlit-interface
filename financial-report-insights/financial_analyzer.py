@@ -225,6 +225,18 @@ class ScenarioResult:
 
 
 @dataclass
+class ProbabilityWeightedResult:
+    """Result of probability-weighted multi-scenario analysis."""
+    scenarios: List[ScenarioResult] = field(default_factory=list)
+    probabilities: List[float] = field(default_factory=list)
+    scenario_names: List[str] = field(default_factory=list)
+    expected_health_score: Optional[float] = None
+    expected_z_score: Optional[float] = None
+    distress_probability: Optional[float] = None  # P(Z < 1.81)
+    summary: str = ""
+
+
+@dataclass
 class SensitivityResult:
     """Result of sensitivity analysis across a range of adjustments."""
     variable_name: str = ""
@@ -2171,6 +2183,17 @@ class FinancialData:
     avg_payables: Optional[float] = None
     avg_total_assets: Optional[float] = None
 
+    # Startup / SaaS metrics (optional)
+    monthly_recurring_revenue: Optional[float] = None
+    annual_recurring_revenue: Optional[float] = None
+    customer_count: Optional[int] = None
+    churned_customers: Optional[int] = None
+    monthly_burn_rate: Optional[float] = None
+    cash_runway_months: Optional[float] = None
+    customer_acquisition_cost: Optional[float] = None
+    lifetime_value: Optional[float] = None
+    total_funding_raised: Optional[float] = None
+
     # Time series data
     time_series: Optional[pd.DataFrame] = None
     period: Optional[str] = None
@@ -3579,6 +3602,90 @@ class CharlieAnalyzer:
             base_ratios=base_ratios,
             scenario_ratios=scenario_ratios,
             impact_summary=' '.join(p for p in summary_parts if p),
+        )
+
+    def multi_scenario_analysis(
+        self,
+        data: FinancialData,
+        scenarios: Dict[str, Dict[str, float]],
+    ) -> List[ScenarioResult]:
+        """Run multiple named scenarios in one call.
+
+        Args:
+            data: Base FinancialData.
+            scenarios: Map of scenario_name -> adjustments dict.
+                       e.g. {"Bull": {"revenue": 1.10}, "Bear": {"revenue": 0.90}}
+
+        Returns:
+            List of ScenarioResult, one per scenario.
+        """
+        results = []
+        for name, adjustments in scenarios.items():
+            results.append(self.scenario_analysis(data, adjustments, scenario_name=name))
+        return results
+
+    def probability_weighted_scenarios(
+        self,
+        data: FinancialData,
+        scenario_probs: List[Dict[str, Any]],
+    ) -> ProbabilityWeightedResult:
+        """Assign probabilities to scenarios and compute expected outcomes.
+
+        Args:
+            data: Base FinancialData.
+            scenario_probs: List of dicts, each with keys:
+                - "name": scenario name
+                - "adjustments": field-to-multiplier map
+                - "probability": 0.0-1.0 weight
+
+        Returns:
+            ProbabilityWeightedResult with expected scores and distress probability.
+        """
+        if not scenario_probs:
+            return ProbabilityWeightedResult(summary="No scenarios provided.")
+
+        # Normalise probabilities to sum to 1.0
+        raw_probs = [s.get("probability", 0.0) for s in scenario_probs]
+        total_prob = sum(raw_probs) or 1.0
+        probs = [p / total_prob for p in raw_probs]
+
+        results: List[ScenarioResult] = []
+        names: List[str] = []
+        for sp in scenario_probs:
+            name = sp.get("name", "Scenario")
+            adjustments = sp.get("adjustments", {})
+            results.append(self.scenario_analysis(data, adjustments, scenario_name=name))
+            names.append(name)
+
+        # Expected values
+        expected_health = sum(
+            p * (r.scenario_health.score if r.scenario_health else 0)
+            for p, r in zip(probs, results)
+        )
+        expected_z = sum(
+            p * (r.scenario_z_score or 0)
+            for p, r in zip(probs, results)
+        )
+
+        # Distress probability: sum of probs where Z-Score < 1.81
+        distress_prob = sum(
+            p for p, r in zip(probs, results)
+            if r.scenario_z_score is not None and r.scenario_z_score < 1.81
+        )
+
+        parts = [f"Prob-weighted across {len(results)} scenarios."]
+        parts.append(f"Expected health: {expected_health:.1f}, expected Z: {expected_z:.2f}.")
+        if distress_prob > 0.2:
+            parts.append(f"WARNING: {distress_prob:.0%} probability of financial distress.")
+
+        return ProbabilityWeightedResult(
+            scenarios=results,
+            probabilities=probs,
+            scenario_names=names,
+            expected_health_score=round(expected_health, 1),
+            expected_z_score=round(expected_z, 2),
+            distress_probability=round(distress_prob, 4),
+            summary=" ".join(parts),
         )
 
     def sensitivity_analysis(self, data: FinancialData, variable: str,

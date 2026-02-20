@@ -114,6 +114,9 @@ class SimpleRAG:
         self._charlie_analyzer = None
         self._financial_analysis_cache = None
 
+        # Per-period FinancialData cache for multi-document comparison
+        self._period_financial_data: Dict[str, Any] = {}
+
         # Embedding cache directory
         self._cache_dir = Path(settings.embedding_cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -194,14 +197,24 @@ class SimpleRAG:
                         if financial_data.revenue is None and financial_data.total_assets is None:
                             continue
 
+                        # Cache for multi-document comparison
+                        if hasattr(self, "_period_financial_data"):
+                            self._period_financial_data[source_name] = financial_data
+
                         report = self.charlie_analyzer.generate_report(financial_data)
 
-                        # Persist to graph if available
+                        # Persist to graph if available (structured path preferred)
                         if getattr(self, "_graph_store", None):
                             try:
-                                from graph_retriever import persist_analysis_to_graph
-                                persist_analysis_to_graph(
-                                    self._graph_store, source_name, source_name, report,
+                                from graph_retriever import persist_structured_analysis_to_graph
+                                from ratio_framework import run_all_ratios
+                                ratio_results = run_all_ratios(financial_data)
+                                persist_structured_analysis_to_graph(
+                                    self._graph_store,
+                                    source_name,
+                                    source_name,
+                                    financial_data=financial_data,
+                                    ratio_results=ratio_results,
                                 )
                             except Exception as exc:
                                 logger.debug("Graph persist failed: %s", exc)
@@ -499,20 +512,29 @@ class SimpleRAG:
         # Embed the query
         query_embedding = self.embedder.embed(query)
 
-        # Try Neo4j vector search first
+        # Try Neo4j graph search first (vector + graph traversal for enriched context)
         if getattr(self, "_graph_store", None):
             try:
-                neo4j_results = self._graph_store.vector_search(
+                neo4j_results = self._graph_store.graph_search(
                     query_embedding, top_k, self._embedding_model_name,
                 )
                 if neo4j_results:
-                    # Convert Neo4j results to document format
                     return [
-                        {"source": r.get("source", ""), "content": r.get("content", ""), "type": "unknown"}
+                        {
+                            "source": r.get("source", ""),
+                            "content": r.get("content", ""),
+                            "type": "unknown",
+                            "_graph_context": {
+                                "document": r.get("document", ""),
+                                "period": r.get("period", ""),
+                                "ratios": r.get("ratios", []),
+                                "scores": r.get("scores", []),
+                            },
+                        }
                         for r in neo4j_results
                     ]
             except Exception as exc:
-                logger.debug("Neo4j vector search failed, falling back to numpy: %s", exc)
+                logger.debug("Neo4j graph search failed, falling back to numpy: %s", exc)
 
         # In-memory numpy fallback
         query_vec = np.asarray(query_embedding, dtype=np.float32)
@@ -668,9 +690,10 @@ class SimpleRAG:
 
         context = "\n\n".join(context_parts)
 
-        # Enhanced prompt for financial queries
-        if is_financial and self.charlie_analyzer and excel_data:
-            prompt = self._build_financial_prompt(query, context, excel_data)
+        # Enhanced prompt for financial queries (excel data or graph context)
+        has_graph_context = any(d.get("_graph_context") for d in relevant_docs)
+        if is_financial and self.charlie_analyzer and (excel_data or has_graph_context):
+            prompt = self._build_financial_prompt(query, context, excel_data, relevant_docs)
         else:
             # Standard RAG prompt
             prompt = f"""You are a helpful assistant that answers questions based on the provided context.
@@ -788,7 +811,26 @@ Answer:"""
         query_lower = query.lower()
         return any(keyword in query_lower for keyword in financial_keywords)
 
-    def _build_financial_prompt(self, query: str, context: str, excel_data: List[Dict]) -> str:
+    @staticmethod
+    def _is_temporal_comparison_query(query: str) -> bool:
+        """Detect queries that compare across time periods."""
+        temporal_patterns = [
+            "change from", "changed from", "year over year", "yoy",
+            "quarter over quarter", "qoq", "compared to", "comparison",
+            "trend", "trends", "over time", "growth rate",
+            "improved", "deteriorated", "worsened", "increased", "decreased",
+            "vs ", "versus", "relative to", "from fy", "from q",
+        ]
+        query_lower = query.lower()
+        return any(pattern in query_lower for pattern in temporal_patterns)
+
+    def _build_financial_prompt(
+        self,
+        query: str,
+        context: str,
+        excel_data: List[Dict],
+        relevant_docs: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """Build an enhanced prompt for financial queries with computed analysis."""
         # Get pre-computed analysis results (cached after first call)
         computed_analysis = self._get_financial_analysis_context()
@@ -801,6 +843,24 @@ COMPUTED FINANCIAL ANALYSIS (use these exact values when answering):
 {computed_analysis}
 """
 
+        # Build graph-retrieved metrics section
+        graph_section = ""
+        if relevant_docs:
+            graph_contexts = [
+                d["_graph_context"]
+                for d in relevant_docs
+                if d.get("_graph_context")
+                and (d["_graph_context"].get("ratios") or d["_graph_context"].get("scores"))
+            ]
+            if graph_contexts:
+                from graph_retriever import format_graph_context
+                formatted = format_graph_context(graph_contexts)
+                if formatted:
+                    graph_section = f"""
+GRAPH-RETRIEVED FINANCIAL METRICS:
+{formatted}
+"""
+
         return f"""You are a senior financial analyst with CFO-level expertise, inspired by Charlie Munger's
 analytical framework. Focus on fundamentals, cash flow, and sustainable competitive advantages.
 
@@ -808,7 +868,7 @@ USER QUERY: {query}
 
 FINANCIAL DATA CONTEXT:
 {context}
-{computed_section}
+{graph_section}{computed_section}
 ANALYSIS FRAMEWORK (Charlie Munger approach):
 1. What are the key value drivers?
 2. What could go wrong? (Inversion thinking)
@@ -864,8 +924,9 @@ Answer:"""
 
         context = "\n\n".join(context_parts)
 
-        if is_financial and self.charlie_analyzer and excel_data:
-            prompt = self._build_financial_prompt(query, context, excel_data)
+        has_graph_context = any(d.get("_graph_context") for d in relevant_docs)
+        if is_financial and self.charlie_analyzer and (excel_data or has_graph_context):
+            prompt = self._build_financial_prompt(query, context, excel_data, relevant_docs)
         else:
             prompt = f"""You are a helpful assistant that answers questions based on the provided context.
 Use ONLY the information from the context to answer. If the answer is not in the context, say so.
@@ -895,6 +956,7 @@ Answer:"""
             self._doc_norms = None
             self._bm25_index = None
             self._financial_analysis_cache = None
+            self._period_financial_data = {}
             self._load_documents()
 
 

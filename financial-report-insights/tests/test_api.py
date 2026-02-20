@@ -157,6 +157,65 @@ class TestAnalyzeEndpoint:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# /graph/context and /graph/ratios (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestGraphContextEndpoint:
+    def test_graph_context_501_when_no_store(self, client, mock_rag):
+        mock_rag._graph_store = None
+        resp = client.get("/graph/context/FY2024")
+        assert resp.status_code == 501
+
+    def test_graph_context_returns_ratios_and_scores(self, client, mock_rag):
+        mock_store = MagicMock()
+        mock_store.ratios_by_period_label.return_value = [
+            {"name": "current_ratio", "value": 2.1, "category": "liquidity"},
+        ]
+        mock_store.scores_by_period_label.return_value = [
+            {"model": "altman_z", "value": 3.2, "grade": "Safe", "interpretation": "Low risk"},
+        ]
+        mock_rag._graph_store = mock_store
+        resp = client.get("/graph/context/FY2024")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["period_label"] == "FY2024"
+        assert len(body["ratios"]) == 1
+        assert len(body["scores"]) == 1
+
+    def test_graph_context_empty_for_unknown_period(self, client, mock_rag):
+        mock_store = MagicMock()
+        mock_store.ratios_by_period_label.return_value = []
+        mock_store.scores_by_period_label.return_value = []
+        mock_rag._graph_store = mock_store
+        resp = client.get("/graph/context/FY9999")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ratios"] == []
+        assert body["scores"] == []
+
+
+class TestGraphRatiosEndpoint:
+    def test_graph_ratios_501_when_no_store(self, client, mock_rag):
+        mock_rag._graph_store = None
+        resp = client.get("/graph/ratios/FY2024")
+        assert resp.status_code == 501
+
+    def test_graph_ratios_category_filter(self, client, mock_rag):
+        mock_store = MagicMock()
+        mock_store.ratios_by_period_label.return_value = [
+            {"name": "current_ratio", "value": 2.1, "category": "liquidity"},
+            {"name": "roa", "value": 0.05, "category": "profitability"},
+        ]
+        mock_rag._graph_store = mock_store
+        resp = client.get("/graph/ratios/FY2024?category=liquidity")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["name"] == "current_ratio"
+
+
 class TestDocumentsEndpoint:
     def test_documents_list(self, client, mock_rag):
         resp = client.get("/documents")

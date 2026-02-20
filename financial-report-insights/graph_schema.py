@@ -205,3 +205,71 @@ MATCH (p:FiscalPeriod)-[:HAS_SCORE]->(s:ScoringResult)
 WHERE p.period_id = $period_id
 RETURN s.model AS model, s.value AS value, s.grade AS grade, s.interpretation AS interpretation
 """
+
+# ---------------------------------------------------------------------------
+# Phase 2: Structured financial data population
+# ---------------------------------------------------------------------------
+
+MERGE_FINANCIAL_STATEMENT = """
+MERGE (s:FinancialStatement {stmt_id: $stmt_id})
+SET s.type = $stmt_type
+WITH s
+MATCH (p:FiscalPeriod {period_id: $period_id})
+MERGE (p)-[:HAS_STATEMENT]->(s)
+RETURN s
+"""
+
+MERGE_LINE_ITEMS_BATCH = """
+UNWIND $batch AS row
+MERGE (i:LineItem {item_id: row.item_id})
+SET i.name = row.name, i.value = row.value, i.unit = row.unit
+WITH i, row
+MATCH (s:FinancialStatement {stmt_id: row.stmt_id})
+MERGE (s)-[:CONTAINS]->(i)
+RETURN count(i) AS stored
+"""
+
+MERGE_DERIVED_FROM_BATCH = """
+UNWIND $batch AS row
+MATCH (r:FinancialRatio {ratio_id: row.ratio_id})
+MATCH (i:LineItem {item_id: row.item_id})
+MERGE (r)-[:DERIVED_FROM {role: row.role}]->(i)
+RETURN count(*) AS linked
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 2/3: Period-label-based reads (no period_id required from caller)
+# ---------------------------------------------------------------------------
+
+RATIOS_BY_PERIOD_LABEL = """
+MATCH (p:FiscalPeriod)-[:HAS_RATIO]->(r:FinancialRatio)
+WHERE p.label = $period_label
+RETURN r.name AS name, r.value AS value, r.category AS category
+ORDER BY r.category, r.name
+"""
+
+SCORES_BY_PERIOD_LABEL = """
+MATCH (p:FiscalPeriod)-[:HAS_SCORE]->(s:ScoringResult)
+WHERE p.label = $period_label
+RETURN s.model AS model, s.value AS value, s.grade AS grade, s.interpretation AS interpretation
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4: Temporal edges and cross-period queries
+# ---------------------------------------------------------------------------
+
+MERGE_TEMPORAL_EDGES = """
+UNWIND $pairs AS pair
+MATCH (earlier:FiscalPeriod {period_id: pair.earlier_id})
+MATCH (later:FiscalPeriod {period_id: pair.later_id})
+MERGE (earlier)-[:PRECEDES]->(later)
+MERGE (later)-[:FOLLOWS]->(earlier)
+RETURN count(*) AS linked
+"""
+
+CROSS_PERIOD_RATIO_TREND = """
+UNWIND $period_labels AS lbl
+MATCH (p:FiscalPeriod {label: lbl})-[:HAS_RATIO]->(r:FinancialRatio)
+RETURN p.label AS period, r.name AS ratio_name, r.value AS value, r.category AS category
+ORDER BY r.name, p.label
+"""

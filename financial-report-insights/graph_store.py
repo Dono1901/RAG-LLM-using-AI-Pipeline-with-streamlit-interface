@@ -182,6 +182,181 @@ class Neo4jStore:
             logger.warning("Neo4j store_financial_data failed: %s", exc)
 
     # ------------------------------------------------------------------
+    # Structured financial data population (Phase 2)
+    # ------------------------------------------------------------------
+
+    # Field name -> (statement_type, display_name, unit)
+    _STATEMENT_FIELD_MAP = {
+        "balance_sheet": [
+            ("total_assets", "Total Assets", "USD"),
+            ("current_assets", "Current Assets", "USD"),
+            ("total_equity", "Total Equity", "USD"),
+            ("total_debt", "Total Debt", "USD"),
+            ("current_liabilities", "Current Liabilities", "USD"),
+            ("cash_and_equivalents", "Cash and Equivalents", "USD"),
+            ("inventory", "Inventory", "USD"),
+            ("accounts_receivable", "Accounts Receivable", "USD"),
+            ("accounts_payable", "Accounts Payable", "USD"),
+        ],
+        "income_statement": [
+            ("revenue", "Revenue", "USD"),
+            ("net_income", "Net Income", "USD"),
+            ("gross_profit", "Gross Profit", "USD"),
+            ("operating_income", "Operating Income", "USD"),
+            ("ebit", "EBIT", "USD"),
+            ("ebitda", "EBITDA", "USD"),
+            ("interest_expense", "Interest Expense", "USD"),
+            ("cogs", "Cost of Goods Sold", "USD"),
+        ],
+        "cash_flow": [
+            ("operating_cash_flow", "Operating Cash Flow", "USD"),
+            ("capital_expenditures", "Capital Expenditures", "USD"),
+        ],
+    }
+
+    def store_line_items(
+        self,
+        financial_data,
+        period_id: str,
+    ) -> int:
+        """Persist FinancialData fields as FinancialStatement + LineItem nodes.
+
+        Args:
+            financial_data: FinancialData instance.
+            period_id: Existing FiscalPeriod node ID to link statements to.
+
+        Returns:
+            Number of line items stored.
+        """
+        from graph_schema import MERGE_FINANCIAL_STATEMENT, MERGE_LINE_ITEMS_BATCH
+
+        total_stored = 0
+        try:
+            with self._driver.session() as session:
+                for stmt_type, fields in self._STATEMENT_FIELD_MAP.items():
+                    stmt_id = hashlib.sha256(
+                        f"{period_id}:{stmt_type}".encode()
+                    ).hexdigest()
+
+                    batch = []
+                    for field_name, display_name, unit in fields:
+                        value = getattr(financial_data, field_name, None)
+                        if value is None:
+                            continue
+                        item_id = hashlib.sha256(
+                            f"{stmt_id}:{field_name}".encode()
+                        ).hexdigest()
+                        batch.append({
+                            "item_id": item_id,
+                            "name": display_name,
+                            "value": float(value),
+                            "unit": unit,
+                            "stmt_id": stmt_id,
+                        })
+
+                    if batch:
+                        session.run(
+                            MERGE_FINANCIAL_STATEMENT,
+                            stmt_id=stmt_id,
+                            stmt_type=stmt_type,
+                            period_id=period_id,
+                        )
+                        session.run(MERGE_LINE_ITEMS_BATCH, batch=batch)
+                        total_stored += len(batch)
+
+            logger.info("Stored %d line items for period %s", total_stored, period_id)
+        except Exception as exc:
+            logger.warning("Neo4j store_line_items failed: %s", exc)
+
+        return total_stored
+
+    def store_derived_from_edges(
+        self,
+        period_id: str,
+    ) -> int:
+        """Create DERIVED_FROM edges from FinancialRatio -> LineItem.
+
+        Uses RATIO_CATALOG from ratio_framework to determine which line items
+        each ratio is derived from (numerator_field, denominator_field).
+
+        Args:
+            period_id: FiscalPeriod ID whose ratios and items to link.
+
+        Returns:
+            Number of edges created.
+        """
+        from graph_schema import MERGE_DERIVED_FROM_BATCH
+
+        try:
+            from ratio_framework import RATIO_CATALOG
+        except ImportError:
+            logger.debug("ratio_framework not available; skipping DERIVED_FROM edges")
+            return 0
+
+        # Build reverse lookup: field_name -> (stmt_type, stmt_id_suffix)
+        field_to_stmt = {}
+        for stmt_type, fields in self._STATEMENT_FIELD_MAP.items():
+            stmt_id = hashlib.sha256(f"{period_id}:{stmt_type}".encode()).hexdigest()
+            for field_name, _, _ in fields:
+                item_id = hashlib.sha256(f"{stmt_id}:{field_name}".encode()).hexdigest()
+                field_to_stmt[field_name] = item_id
+
+        batch = []
+        for ratio_key, defn in RATIO_CATALOG.items():
+            ratio_id = hashlib.sha256(f"{period_id}:{defn.name}".encode()).hexdigest()
+            for role, field_name in [("numerator", defn.numerator_field), ("denominator", defn.denominator_field)]:
+                item_id = field_to_stmt.get(field_name)
+                if item_id:
+                    batch.append({
+                        "ratio_id": ratio_id,
+                        "item_id": item_id,
+                        "role": role,
+                    })
+
+        if not batch:
+            return 0
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_DERIVED_FROM_BATCH, batch=batch)
+            logger.info("Created %d DERIVED_FROM edges for period %s", len(batch), period_id)
+            return len(batch)
+        except Exception as exc:
+            logger.warning("Neo4j store_derived_from_edges failed: %s", exc)
+            return 0
+
+    def link_fiscal_periods(self, period_labels_and_ids: List[Dict[str, str]]) -> int:
+        """Create temporal PRECEDES/FOLLOWS edges between fiscal periods.
+
+        Args:
+            period_labels_and_ids: List of dicts with 'label' and 'period_id' keys,
+                sorted chronologically.
+
+        Returns:
+            Number of temporal edge pairs created.
+        """
+        from graph_schema import MERGE_TEMPORAL_EDGES
+
+        if len(period_labels_and_ids) < 2:
+            return 0
+
+        pairs = []
+        for i in range(len(period_labels_and_ids) - 1):
+            pairs.append({
+                "earlier_id": period_labels_and_ids[i]["period_id"],
+                "later_id": period_labels_and_ids[i + 1]["period_id"],
+            })
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_TEMPORAL_EDGES, pairs=pairs)
+            logger.info("Linked %d temporal period pairs", len(pairs))
+            return len(pairs)
+        except Exception as exc:
+            logger.warning("Neo4j link_fiscal_periods failed: %s", exc)
+            return 0
+
+    # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
 
@@ -262,6 +437,39 @@ class Neo4jStore:
             return vector_results  # degrade to vector-only
 
         return enriched
+
+    def ratios_by_period_label(self, period_label: str) -> List[Dict[str, Any]]:
+        """Return all ratios for a fiscal period identified by label."""
+        from graph_schema import RATIOS_BY_PERIOD_LABEL
+        try:
+            with self._driver.session() as session:
+                result = session.run(RATIOS_BY_PERIOD_LABEL, period_label=period_label)
+                return [dict(record) for record in result]
+        except Exception as exc:
+            logger.warning("Neo4j ratios_by_period_label failed: %s", exc)
+            return []
+
+    def scores_by_period_label(self, period_label: str) -> List[Dict[str, Any]]:
+        """Return all scores for a fiscal period identified by label."""
+        from graph_schema import SCORES_BY_PERIOD_LABEL
+        try:
+            with self._driver.session() as session:
+                result = session.run(SCORES_BY_PERIOD_LABEL, period_label=period_label)
+                return [dict(record) for record in result]
+        except Exception as exc:
+            logger.warning("Neo4j scores_by_period_label failed: %s", exc)
+            return []
+
+    def cross_period_ratio_trend(self, period_labels: List[str]) -> List[Dict[str, Any]]:
+        """Return ratio values across multiple fiscal periods for trend analysis."""
+        from graph_schema import CROSS_PERIOD_RATIO_TREND
+        try:
+            with self._driver.session() as session:
+                result = session.run(CROSS_PERIOD_RATIO_TREND, period_labels=period_labels)
+                return [dict(record) for record in result]
+        except Exception as exc:
+            logger.warning("Neo4j cross_period_ratio_trend failed: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Lifecycle
