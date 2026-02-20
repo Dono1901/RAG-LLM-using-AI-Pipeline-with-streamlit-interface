@@ -63,7 +63,7 @@ class TestMultiScenarioAnalysis:
         names = [r.scenario_name for r in results]
         assert names == ["Bull", "Base", "Bear"]
 
-    def test_bull_better_than_bear(self, analyzer, sample_data):
+    def test_bull_has_higher_z_score_than_bear(self, analyzer, sample_data):
         scenarios = {
             "Bull": {"revenue": 1.20},
             "Bear": {"revenue": 0.80},
@@ -71,8 +71,8 @@ class TestMultiScenarioAnalysis:
         results = analyzer.multi_scenario_analysis(sample_data, scenarios)
         bull = results[0]
         bear = results[1]
-        if bull.scenario_health and bear.scenario_health:
-            assert bull.scenario_health.score >= bear.scenario_health.score
+        # Z-Score is directly correlated with revenue (sales/total_assets)
+        assert bull.scenario_z_score > bear.scenario_z_score
 
     def test_empty_scenarios(self, analyzer, sample_data):
         results = analyzer.multi_scenario_analysis(sample_data, {})

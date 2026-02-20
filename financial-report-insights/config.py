@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # API
     api_port: int = 8504
 
+    # Export
+    export_max_ratios: int = 200  # Max ratios per export
+    export_company_name: str = ""  # Default company name for exports
+
     model_config = {"env_prefix": "RAG_"}
 
 

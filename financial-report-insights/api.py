@@ -4,6 +4,7 @@ Wraps SimpleRAG, CharlieAnalyzer, and health checks as HTTP endpoints.
 """
 
 import asyncio
+import io
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -11,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -350,6 +352,70 @@ async def compare_periods(req: CompareRequest):
         deltas=deltas,
         graph_trend_data=graph_trend_data,
         summary=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Export endpoints
+# ---------------------------------------------------------------------------
+
+
+class ExportRequest(BaseModel):
+    financial_data: Dict[str, Any]
+    company_name: str = ""
+
+
+@app.post("/export/xlsx")
+async def export_xlsx(req: ExportRequest):
+    """Export financial analysis as Excel workbook."""
+    from export_xlsx import FinancialExcelExporter
+    from financial_analyzer import FinancialData
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
+    data = FinancialData(**filtered)
+
+    rag = _get_rag()
+    if not rag.charlie_analyzer:
+        raise HTTPException(status_code=501, detail="Financial analyzer not available.")
+
+    analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
+    report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
+
+    exporter = FinancialExcelExporter()
+    xlsx_bytes = exporter.export_full_report(data, analysis, report=report)
+
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="financial_report.xlsx"'},
+    )
+
+
+@app.post("/export/pdf")
+async def export_pdf(req: ExportRequest):
+    """Export financial analysis as PDF report."""
+    from export_pdf import FinancialPDFExporter
+    from financial_analyzer import FinancialData
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
+    data = FinancialData(**filtered)
+
+    rag = _get_rag()
+    if not rag.charlie_analyzer:
+        raise HTTPException(status_code=501, detail="Financial analyzer not available.")
+
+    analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
+    report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
+
+    exporter = FinancialPDFExporter()
+    pdf_bytes = exporter.export_full_report(data, analysis, report=report)
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="financial_report.pdf"'},
     )
 
 

@@ -186,6 +186,17 @@ class FinancialInsightsPage:
             ("Asset Lightness", "_render_asset_lightness", False),
             ("Operating Momentum", "_render_operating_momentum", False),
         ],
+        "Underwriting": [
+            ("Credit Scorecard", "_render_credit_scorecard", False),
+            ("Debt Capacity", "_render_debt_capacity", False),
+            ("Covenant Package", "_render_covenant_package", False),
+        ],
+        "Startup Modeling": [
+            ("SaaS Metrics", "_render_saas_metrics", False),
+            ("Unit Economics", "_render_unit_economics", False),
+            ("Burn & Runway", "_render_burn_runway", False),
+            ("Funding Scenarios", "_render_funding_scenarios", False),
+        ],
     }
 
     def __init__(self, docs_folder: str = "./documents"):
@@ -1162,6 +1173,44 @@ class FinancialInsightsPage:
             except Exception as e:
                 logger.debug(f"Could not generate report: {e}")
                 st.caption("Report unavailable for this data.")
+
+        # XLSX and PDF export buttons
+        try:
+            financial_data = self.analyzer._dataframe_to_financial_data(df)
+            analysis = self.analyzer.analyze(financial_data)
+            report = self.analyzer.generate_report(financial_data)
+
+            xlsx_col, pdf_col = st.columns(2)
+            with xlsx_col:
+                try:
+                    from export_xlsx import FinancialExcelExporter
+                    exporter = FinancialExcelExporter()
+                    xlsx_bytes = exporter.export_full_report(financial_data, analysis, report=report)
+                    st.download_button(
+                        "Export as Excel",
+                        xlsx_bytes,
+                        "financial_report.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_xlsx",
+                    )
+                except Exception as e:
+                    logger.debug("XLSX export unavailable: %s", e)
+            with pdf_col:
+                try:
+                    from export_pdf import FinancialPDFExporter
+                    exporter = FinancialPDFExporter()
+                    pdf_bytes = exporter.export_full_report(financial_data, analysis, report=report)
+                    st.download_button(
+                        "Export as PDF",
+                        pdf_bytes,
+                        "financial_report.pdf",
+                        "application/pdf",
+                        key="dl_pdf",
+                    )
+                except Exception as e:
+                    logger.debug("PDF export unavailable: %s", e)
+        except Exception as e:
+            logger.debug("Export buttons unavailable: %s", e)
 
     # ===== PHASE 5: WHAT-IF ANALYSIS =====
 
@@ -7483,6 +7532,182 @@ class FinancialInsightsPage:
             st.plotly_chart(fig, use_container_width=True)
 
         st.caption(result.summary)
+
+    # ===== UNDERWRITING TABS =====
+
+    def _render_credit_scorecard(self, df: pd.DataFrame):
+        """Render credit scorecard from underwriting analysis."""
+        from underwriting import UnderwritingAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        ua = UnderwritingAnalyzer(self.analyzer)
+        scorecard = ua.credit_scorecard(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Credit Score", f"{scorecard.total_score}/100")
+        col2.metric("Grade", scorecard.grade)
+        col3.metric("Recommendation", scorecard.recommendation.title())
+
+        st.subheader("Category Breakdown")
+        for cat, score in scorecard.category_scores.items():
+            st.progress(score / 20, text=f"{cat.title()}: {score}/20")
+
+        if scorecard.strengths:
+            st.success("**Strengths:** " + ", ".join(scorecard.strengths))
+        if scorecard.weaknesses:
+            st.warning("**Weaknesses:** " + ", ".join(scorecard.weaknesses))
+        if scorecard.conditions:
+            st.info("**Conditions:** " + ", ".join(scorecard.conditions))
+
+    def _render_debt_capacity(self, df: pd.DataFrame):
+        """Render debt capacity analysis."""
+        from underwriting import UnderwritingAnalyzer, LoanStructure
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        ua = UnderwritingAnalyzer(self.analyzer)
+
+        st.subheader("Proposed Loan Parameters")
+        col1, col2, col3 = st.columns(3)
+        principal = col1.number_input("Principal ($)", value=1_000_000, step=100_000, key="uw_principal")
+        rate = col2.number_input("Annual Rate (%)", value=5.0, step=0.25, key="uw_rate") / 100
+        term = col3.number_input("Term (years)", value=5, step=1, key="uw_term")
+
+        loan = LoanStructure(principal=principal, annual_rate=rate, term_years=term)
+        result = ua.debt_capacity(data, loan)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Current Leverage", f"{result.current_leverage:.1f}x" if result.current_leverage else "N/A")
+        col2.metric("Pro-forma Leverage", f"{result.pro_forma_leverage:.1f}x" if result.pro_forma_leverage else "N/A")
+        col3.metric("Pro-forma DSCR", f"{result.pro_forma_dscr:.2f}x" if result.pro_forma_dscr else "N/A")
+
+        if result.max_additional_debt is not None:
+            st.info(f"Max additional debt capacity: **${result.max_additional_debt:,.0f}**")
+        st.markdown(f"**Assessment:** {result.assessment}")
+
+    def _render_covenant_package(self, df: pd.DataFrame):
+        """Render recommended covenant package."""
+        from underwriting import UnderwritingAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        ua = UnderwritingAnalyzer(self.analyzer)
+        scorecard = ua.credit_scorecard(data)
+        covenants = ua.recommend_covenants(data, scorecard)
+
+        st.metric("Covenant Tier", covenants.covenant_tier.title())
+
+        st.subheader("Financial Covenants")
+        for name, details in covenants.financial_covenants.items():
+            threshold = details.get("threshold", "N/A")
+            freq = details.get("frequency", "quarterly")
+            st.markdown(f"- **{name.replace('_', ' ').title()}**: {threshold} ({freq})")
+
+        if covenants.reporting_requirements:
+            st.subheader("Reporting Requirements")
+            for req in covenants.reporting_requirements:
+                st.markdown(f"- {req}")
+
+        if covenants.events_of_default:
+            st.subheader("Events of Default")
+            for event in covenants.events_of_default:
+                st.markdown(f"- {event}")
+
+    # ===== STARTUP MODELING TABS =====
+
+    def _render_saas_metrics(self, df: pd.DataFrame):
+        """Render SaaS metrics dashboard."""
+        from startup_model import StartupAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        sa = StartupAnalyzer()
+        metrics = sa.saas_metrics(data)
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("MRR", f"${metrics.mrr:,.0f}" if metrics.mrr else "N/A")
+        col2.metric("ARR", f"${metrics.arr:,.0f}" if metrics.arr else "N/A")
+        col3.metric("ARPU", f"${metrics.arpu:,.0f}" if metrics.arpu else "N/A")
+        col4.metric("Customers", f"{metrics.customers:,}" if metrics.customers else "N/A")
+
+        col1, col2 = st.columns(2)
+        col1.metric("Gross Churn", f"{metrics.gross_churn_rate:.1%}" if metrics.gross_churn_rate is not None else "N/A")
+        col2.metric("Net Revenue Retention", f"{metrics.net_revenue_retention:.1%}" if metrics.net_revenue_retention is not None else "N/A")
+
+        if metrics.interpretation:
+            st.info(metrics.interpretation)
+
+    def _render_unit_economics(self, df: pd.DataFrame):
+        """Render unit economics analysis."""
+        from startup_model import StartupAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        sa = StartupAnalyzer()
+        ue = sa.unit_economics(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("CAC", f"${ue.cac:,.0f}" if ue.cac else "N/A")
+        col2.metric("LTV", f"${ue.ltv:,.0f}" if ue.ltv else "N/A")
+        col3.metric("LTV/CAC", f"{ue.ltv_to_cac:.1f}x" if ue.ltv_to_cac else "N/A")
+
+        col1, col2 = st.columns(2)
+        col1.metric("Payback", f"{ue.payback_months:.0f} months" if ue.payback_months else "N/A")
+        col2.metric("GM-Adj LTV", f"${ue.gross_margin_adjusted_ltv:,.0f}" if ue.gross_margin_adjusted_ltv else "N/A")
+
+        if ue.interpretation:
+            if "Healthy" in ue.interpretation:
+                st.success(ue.interpretation)
+            elif "Unsustainable" in ue.interpretation:
+                st.error(ue.interpretation)
+            else:
+                st.warning(ue.interpretation)
+
+    def _render_burn_runway(self, df: pd.DataFrame):
+        """Render burn rate and runway analysis."""
+        from startup_model import StartupAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        sa = StartupAnalyzer()
+        br = sa.burn_runway(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Net Burn", f"${br.net_burn:,.0f}/mo" if br.net_burn else "N/A")
+        col2.metric("Runway", f"{br.runway_months:.0f} months" if br.runway_months else "N/A")
+        col3.metric("Category", br.category.title() if br.category else "N/A")
+
+        if br.cash_on_hand:
+            st.metric("Cash on Hand", f"${br.cash_on_hand:,.0f}")
+        if br.breakeven_revenue_needed:
+            st.info(f"Revenue needed to break even: **${br.breakeven_revenue_needed:,.0f}/mo**")
+
+        if br.interpretation:
+            color_map = {"critical": "error", "caution": "warning", "comfortable": "info", "strong": "success"}
+            getattr(st, color_map.get(br.category, "info"))(br.interpretation)
+
+    def _render_funding_scenarios(self, df: pd.DataFrame):
+        """Render funding scenario analysis."""
+        from startup_model import StartupAnalyzer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        sa = StartupAnalyzer()
+
+        st.subheader("Configure Funding Scenarios")
+        n_scenarios = st.number_input("Number of scenarios", min_value=1, max_value=5, value=2, key="n_fund_scen")
+
+        scenarios = []
+        for i in range(n_scenarios):
+            col1, col2 = st.columns(2)
+            amount = col1.number_input(f"Raise Amount #{i+1} ($)", value=5_000_000, step=500_000, key=f"fund_amt_{i}")
+            valuation = col2.number_input(f"Pre-Money Valuation #{i+1} ($)", value=20_000_000, step=1_000_000, key=f"fund_val_{i}")
+            scenarios.append({"raise_amount": amount, "pre_money_valuation": valuation})
+
+        if st.button("Analyze Funding Scenarios", key="btn_fund_analyze"):
+            results = sa.funding_scenarios(data, scenarios)
+            for fs in results:
+                with st.expander(f"${fs.raise_amount:,.0f} raise @ ${fs.pre_money_valuation:,.0f} pre-money"):
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Post-Money", f"${fs.post_money_valuation:,.0f}")
+                    col2.metric("Dilution", f"{fs.dilution_pct:.1%}")
+                    col3.metric("New Runway", f"{fs.new_runway_months:.0f} mo" if fs.new_runway_months else "N/A")
+                    if fs.implied_arr_multiple:
+                        st.metric("Implied ARR Multiple", f"{fs.implied_arr_multiple:.1f}x")
 
     def _render_data_explorer(self, df: pd.DataFrame, workbook: WorkbookData):
         """Render data exploration section."""
