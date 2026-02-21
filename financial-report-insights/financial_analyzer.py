@@ -3528,13 +3528,22 @@ class CharlieAnalyzer:
             data: Base financial data.
             adjustments: Dict mapping field names to multipliers.
                          e.g. {'revenue': 1.10} means +10% revenue.
+
+        Returns:
+            Adjusted copy.  Sets ``_skipped_adjustments`` attribute on the
+            returned object listing field names that were None in base data
+            (and therefore could not be adjusted).
         """
         import copy
         adjusted = copy.deepcopy(data)
+        skipped: List[str] = []
         for field_name, multiplier in adjustments.items():
             current_val = getattr(adjusted, field_name, None)
             if current_val is not None:
                 setattr(adjusted, field_name, current_val * multiplier)
+            else:
+                skipped.append(field_name)
+        adjusted._skipped_adjustments = skipped  # type: ignore[attr-defined]
         return adjusted
 
     def scenario_analysis(self, data: FinancialData,
@@ -3591,12 +3600,17 @@ class CharlieAnalyzer:
         z_delta = ((scen_z.z_score or 0) - (base_z.z_score or 0))
         adj_strs = [f"{k} {'+'if v>=1 else ''}{(v-1)*100:+.0f}%"
                     for k, v in adjustments.items()]
+        skipped = getattr(adjusted, '_skipped_adjustments', [])
         summary_parts = [
             f"Scenario '{scenario_name}': {', '.join(adj_strs)}.",
             f"Health score: {base_health.score} -> {scen_health.score} ({health_delta:+d}).",
             f"Z-Score: {base_z.z_score:.2f} -> {scen_z.z_score:.2f} ({z_delta:+.2f})." if base_z.z_score and scen_z.z_score else "",
             f"Grade: {base_health.grade} -> {scen_health.grade}.",
         ]
+        if skipped:
+            summary_parts.append(
+                f"WARNING: Adjustments skipped (base value is None): {', '.join(skipped)}."
+            )
 
         return ScenarioResult(
             scenario_name=scenario_name,

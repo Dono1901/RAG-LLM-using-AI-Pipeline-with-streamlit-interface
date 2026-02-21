@@ -200,6 +200,14 @@ class TestScenarioAnalysis:
         result = analyzer.scenario_analysis(sample_data, adj)
         assert result.adjustments == adj
 
+    def test_none_field_adjustment_warns_in_summary(self, analyzer):
+        """Adjusting a None field should produce a warning in impact_summary."""
+        data = FinancialData(revenue=1_000_000, total_assets=5_000_000)
+        # net_income is None on this data
+        result = analyzer.scenario_analysis(data, {'net_income': 1.10})
+        assert "WARNING" in result.impact_summary
+        assert "net_income" in result.impact_summary
+
 
 # ===== Sensitivity Analysis Tests =====
 
