@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from export_utils import score_to_grade as _score_to_grade
 from financial_analyzer import (
     CharlieAnalyzer,
     CompositeHealthScore,
@@ -21,25 +22,6 @@ from financial_analyzer import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
-
-_GRADE_THRESHOLDS: List[Tuple[int, str]] = [
-    (80, "A"),
-    (65, "B"),
-    (50, "C"),
-    (35, "D"),
-]
-
-
-def _score_to_grade(score: int) -> str:
-    """Map a 0-100 integer score to a letter grade."""
-    for threshold, grade in _GRADE_THRESHOLDS:
-        if score >= threshold:
-            return grade
-    return "F"
 
 
 @dataclass
@@ -245,17 +227,18 @@ class PortfolioAnalyzer:
         # Use corrcoef on the rows (each row = one company's ratio profile)
         corr = np.corrcoef(ratio_matrix)
 
-        # Handle NaN from constant rows (replace with 0)
-        corr = np.nan_to_num(corr, nan=0.0)
-
-        matrix_list = corr.tolist()
-
-        # Average off-diagonal correlation (vectorized upper triangle)
+        # Average off-diagonal correlation, excluding NaN pairs
         if n > 1:
             mask = np.triu(np.ones((n, n), dtype=bool), k=1)
-            avg_corr = float(corr[mask].mean())
+            off_diag = corr[mask]
+            valid = off_diag[~np.isnan(off_diag)]
+            avg_corr = float(valid.mean()) if len(valid) > 0 else 0.0
         else:
             avg_corr = 0.0
+
+        # Replace NaN with 0.0 only for the output matrix (display purposes)
+        corr = np.nan_to_num(corr, nan=0.0)
+        matrix_list = corr.tolist()
 
         if avg_corr > 0.7:
             interp = (

@@ -213,6 +213,20 @@ class TestCorrelationMatrix:
         corr = analyzer.correlation_matrix(three_company_portfolio)
         assert len(corr.interpretation) > 10
 
+    def test_constant_ratio_nan_excluded(self, analyzer):
+        """RISK-1 fix: companies with identical ratios produce NaN correlations;
+        avg_correlation should exclude NaN pairs, not inflate to 0.0."""
+        # Two companies with identical financial data -> corrcoef produces NaN
+        identical = FinancialData(
+            revenue=100, net_income=10, total_assets=200,
+            current_assets=50, current_liabilities=25,
+            total_debt=50, ebit=20, interest_expense=5,
+        )
+        companies = {"A": identical, "B": identical}
+        corr = analyzer.correlation_matrix(companies)
+        # NaN rows should not drag average toward 0
+        assert isinstance(corr.avg_correlation, float)
+
 
 # ---------------------------------------------------------------------------
 # Diversification Score

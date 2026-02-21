@@ -164,6 +164,26 @@ class TestCreditScorecard:
         assert _score_to_grade(0) == "F"
         assert _score_to_grade(35) == "D"
 
+    def test_negative_equity_scores_zero_leverage(self, analyzer):
+        """CORRUPT-04 fix: negative equity must not earn max leverage points."""
+        from underwriting import UnderwritingAnalyzer
+        # D/E = 500k / -200k = -2.5 (negative equity)
+        # D/A = 500k / 300k = 1.67
+        data = FinancialData(
+            total_debt=500_000,
+            total_equity=-200_000,
+            total_assets=300_000,
+            revenue=1_000_000,
+            net_income=50_000,
+        )
+        sc = analyzer.credit_scorecard(data)
+        assert sc.category_scores["leverage"] == 0
+
+    def test_negative_d_e_from_negative_equity(self, analyzer):
+        """Verify _score_leverage returns 0 when D/E is negative."""
+        assert UnderwritingAnalyzer._score_leverage(-2.5, 1.67) == 0
+        assert UnderwritingAnalyzer._score_leverage(-0.1, 0.1) == 0
+
 
 # ---------------------------------------------------------------------------
 # DebtCapacity tests

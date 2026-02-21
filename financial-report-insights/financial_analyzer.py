@@ -4,7 +4,9 @@ CFO-grade financial analysis with automatic metric extraction and insight genera
 Named after Charlie Munger who embodied the principles of rigorous financial analysis.
 """
 
+import ast
 import logging
+import operator
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
@@ -4713,6 +4715,47 @@ class CharlieAnalyzer:
         'operating_cash_flow', 'investing_cash_flow', 'financing_cash_flow', 'capex',
     })
 
+    _AST_OPS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+
+    @classmethod
+    def _safe_eval_formula(cls, formula: str, namespace: Dict[str, float]) -> float:
+        """Evaluate an arithmetic formula using AST walking (no eval).
+
+        Only allows: numeric literals, names in *namespace*, and
+        binary/unary +, -, *, /.  Raises ValueError on anything else.
+        """
+        tree = ast.parse(formula, mode="eval")
+
+        def _walk(node):
+            if isinstance(node, ast.Expression):
+                return _walk(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            if isinstance(node, ast.Name):
+                if node.id in namespace:
+                    return namespace[node.id]
+                raise NameError(f"Unknown variable: '{node.id}'")
+            if isinstance(node, ast.BinOp):
+                op = cls._AST_OPS.get(type(node.op))
+                if op is None:
+                    raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+                return op(_walk(node.left), _walk(node.right))
+            if isinstance(node, ast.UnaryOp):
+                op = cls._AST_OPS.get(type(node.op))
+                if op is None:
+                    raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+                return op(_walk(node.operand))
+            raise ValueError(f"Unsupported expression: {type(node).__name__}")
+
+        return float(_walk(tree))
+
     def evaluate_custom_kpis(
         self,
         data: FinancialData,
@@ -4766,11 +4809,11 @@ class CharlieAnalyzer:
                 continue
 
             try:
-                value = eval(sanitized, {"__builtins__": {}}, namespace)  # noqa: S307
-                if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
+                value = self._safe_eval_formula(sanitized, namespace)
+                if np.isnan(value) or np.isinf(value):
                     r.error = "Formula produced invalid result"
                 else:
-                    r.value = float(value)
+                    r.value = value
                     if kpi.target_min is not None and kpi.target_max is not None:
                         r.meets_target = kpi.target_min <= r.value <= kpi.target_max
                     elif kpi.target_min is not None:

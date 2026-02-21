@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from export_utils import score_to_grade as _score_to_grade
 from financial_analyzer import (
     CharlieAnalyzer,
     CompositeHealthScore,
@@ -90,22 +91,6 @@ class UnderwritingReport:
 # ---------------------------------------------------------------------------
 # Scoring helpers (pure functions)
 # ---------------------------------------------------------------------------
-
-_GRADE_THRESHOLDS: List[Tuple[int, str]] = [
-    (80, "A"),
-    (65, "B"),
-    (50, "C"),
-    (35, "D"),
-]
-
-
-def _score_to_grade(score: int) -> str:
-    """Map a 0-100 integer score to a letter grade."""
-    for threshold, grade in _GRADE_THRESHOLDS:
-        if score >= threshold:
-            return grade
-    return "F"
-
 
 def _grade_to_recommendation(grade: str) -> str:
     """Map letter grade to a lending recommendation."""
@@ -217,6 +202,9 @@ class UnderwritingAnalyzer:
     ) -> int:
         de = d_e if d_e is not None else 999
         da = d_a if d_a is not None else 999
+        # Negative D/E means negative equity (worst case), not low leverage
+        if de < 0:
+            return 0
         if de < 0.5 and da < 0.3:
             return 20
         if de < 1.0 and da < 0.5:

@@ -1,10 +1,30 @@
-"""Shared helpers for financial export modules (XLSX and PDF).
+"""Shared helpers for financial analysis modules.
 
-Contains key-name classification utilities and ratio category grouping
-that are used by both export_xlsx.py and export_pdf.py.
+Contains key-name classification utilities, ratio category grouping,
+and common scoring functions used across multiple modules.
 """
 
-from typing import Dict
+from typing import Dict, List, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Common scoring helpers
+# ---------------------------------------------------------------------------
+
+_GRADE_THRESHOLDS_100: List[Tuple[int, str]] = [
+    (80, "A"),
+    (65, "B"),
+    (50, "C"),
+    (35, "D"),
+]
+
+
+def score_to_grade(score: int) -> str:
+    """Map a 0-100 integer score to a letter grade (A/B/C/D/F)."""
+    for threshold, grade in _GRADE_THRESHOLDS_100:
+        if score >= threshold:
+            return grade
+    return "F"
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,41 @@ from export_utils import (
     _is_dollar_key,
     _CATEGORY_MAP,
     _categorize,
+    score_to_grade,
 )
+
+
+# ---------------------------------------------------------------------------
+# score_to_grade (canonical 100-scale grading)
+# ---------------------------------------------------------------------------
+
+class TestScoreToGrade:
+    def test_grade_a_at_80(self):
+        assert score_to_grade(80) == "A"
+
+    def test_grade_a_at_100(self):
+        assert score_to_grade(100) == "A"
+
+    def test_grade_b_at_65(self):
+        assert score_to_grade(65) == "B"
+
+    def test_grade_b_at_79(self):
+        assert score_to_grade(79) == "B"
+
+    def test_grade_c_at_50(self):
+        assert score_to_grade(50) == "C"
+
+    def test_grade_d_at_35(self):
+        assert score_to_grade(35) == "D"
+
+    def test_grade_f_at_34(self):
+        assert score_to_grade(34) == "F"
+
+    def test_grade_f_at_0(self):
+        assert score_to_grade(0) == "F"
+
+    def test_grade_f_negative(self):
+        assert score_to_grade(-5) == "F"
 
 
 # ---------------------------------------------------------------------------

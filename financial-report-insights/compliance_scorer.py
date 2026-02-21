@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from export_utils import score_to_grade as _score_to_grade
 from financial_analyzer import (
     CharlieAnalyzer,
     FinancialData,
@@ -19,24 +20,6 @@ from financial_analyzer import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
-
-_GRADE_THRESHOLDS: List[Tuple[int, str]] = [
-    (80, "A"),
-    (65, "B"),
-    (50, "C"),
-    (35, "D"),
-]
-
-
-def _score_to_grade(score: int) -> str:
-    for threshold, grade in _GRADE_THRESHOLDS:
-        if score >= threshold:
-            return grade
-    return "F"
 
 
 @dataclass

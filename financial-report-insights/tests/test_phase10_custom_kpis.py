@@ -227,6 +227,36 @@ class TestCustomKPISecurity:
         result = analyzer.evaluate_custom_kpis(sample_data, kpis)
         assert result.results[0].error is not None
 
+    def test_no_lambda(self, analyzer, sample_data):
+        """AST evaluator rejects lambda expressions."""
+        kpis = [CustomKPIDefinition(name="hack", formula="(lambda: revenue)()")]
+        result = analyzer.evaluate_custom_kpis(sample_data, kpis)
+        assert result.results[0].error is not None
+
+    def test_no_list_comprehension(self, analyzer, sample_data):
+        """AST evaluator rejects list comprehensions."""
+        kpis = [CustomKPIDefinition(name="hack", formula="[x for x in [1,2,3]]")]
+        result = analyzer.evaluate_custom_kpis(sample_data, kpis)
+        assert result.results[0].error is not None
+
+    def test_no_attribute_access(self, analyzer, sample_data):
+        """AST evaluator rejects attribute access (no dot notation)."""
+        kpis = [CustomKPIDefinition(name="hack", formula="revenue.real")]
+        result = analyzer.evaluate_custom_kpis(sample_data, kpis)
+        assert result.results[0].error is not None
+
+    def test_no_subscript(self, analyzer, sample_data):
+        """AST evaluator rejects subscript access."""
+        kpis = [CustomKPIDefinition(name="hack", formula="revenue[0]")]
+        result = analyzer.evaluate_custom_kpis(sample_data, kpis)
+        assert result.results[0].error is not None
+
+    def test_unary_minus_allowed(self, analyzer, sample_data):
+        """Unary minus should work in formulas."""
+        kpis = [CustomKPIDefinition(name="neg", formula="-revenue")]
+        result = analyzer.evaluate_custom_kpis(sample_data, kpis)
+        assert result.results[0].value == -1_000_000
+
 
 # ===== EDGE CASES =====
 
