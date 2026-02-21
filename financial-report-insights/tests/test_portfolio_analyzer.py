@@ -341,3 +341,106 @@ class TestFullPortfolioAnalysis:
         # Summary should mention strongest and weakest
         assert "Strongest" in report.summary or "strongest" in report.summary
         assert "Weakest" in report.summary or "weakest" in report.summary
+
+
+# ---------------------------------------------------------------------------
+# CRASH/Edge-case regression tests (Swarm Audit)
+# ---------------------------------------------------------------------------
+
+
+class TestDiversificationSingleCompany:
+    """CRASH-05 regression: single or empty company must not ZeroDivisionError."""
+
+    def test_single_company_diversification_score_zero(self, analyzer, strong_company):
+        score = analyzer.diversification_score({"Only": strong_company})
+        assert isinstance(score, DiversificationScore)
+        assert score.overall_score == 0
+        assert score.grade == "F"
+
+    def test_empty_portfolio_diversification_score_zero(self, analyzer):
+        score = analyzer.diversification_score({})
+        assert score.overall_score == 0
+        assert score.grade == "F"
+
+    def test_single_company_full_analysis_no_crash(self, analyzer, strong_company):
+        report = analyzer.full_portfolio_analysis({"Solo": strong_company})
+        assert report.diversification.overall_score == 0
+
+
+class TestCorrelationEdgeCases:
+    """Coverage gaps: identical companies, all-zero, high/low interpretations."""
+
+    def test_identical_companies_no_nan(self, analyzer, strong_company):
+        companies = {"A": strong_company, "B": strong_company}
+        result = analyzer.correlation_matrix(companies)
+        assert isinstance(result, CorrelationMatrix)
+        # Should not contain NaN
+        for row in result.matrix:
+            for val in row:
+                assert not math.isnan(val)
+
+    def test_all_zero_companies_no_crash(self, analyzer):
+        empty = FinancialData()
+        companies = {"A": empty, "B": empty}
+        result = analyzer.correlation_matrix(companies)
+        assert isinstance(result, CorrelationMatrix)
+
+    def test_correlation_symmetric(self, analyzer, strong_company, weak_company):
+        companies = {"S": strong_company, "W": weak_company}
+        result = analyzer.correlation_matrix(companies)
+        assert abs(result.matrix[0][1] - result.matrix[1][0]) < 1e-9
+
+
+class TestPortfolioRiskBoundary:
+    """Coverage gap: risk level boundary conditions."""
+
+    def test_risk_level_low_for_strong_portfolio(self, analyzer, strong_company):
+        companies = {"A": strong_company, "B": strong_company}
+        report = analyzer.full_portfolio_analysis(companies)
+        assert report.risk_summary.overall_risk_level in ("low", "moderate")
+
+    def test_risk_flags_for_weak_company(self, analyzer, weak_company):
+        companies = {"W1": weak_company, "W2": weak_company}
+        report = analyzer.full_portfolio_analysis(companies)
+        assert len(report.risk_summary.risk_flags) > 0
+
+
+class TestHHIEdgeCases:
+    """Coverage gap: _hhi with negative, None, and equal values."""
+
+    def test_hhi_negative_values_filtered(self):
+        assert _hhi([100, -50, 200]) == _hhi([100, 200])
+
+    def test_hhi_none_values_filtered(self):
+        assert _hhi([None, 100, None, 200]) == _hhi([100, 200])
+
+    def test_hhi_two_equal_values(self):
+        assert abs(_hhi([100, 100]) - 0.5) < 1e-9
+
+    def test_hhi_single_value(self):
+        assert abs(_hhi([500]) - 1.0) < 1e-9
+
+
+class TestScoreToGradeBoundary:
+    """Coverage gap: exact boundary values for _score_to_grade."""
+
+    def test_score_80_is_A(self):
+        assert _score_to_grade(80) == "A"
+
+    def test_score_79_is_B(self):
+        assert _score_to_grade(79) == "B"
+
+    def test_score_65_is_B(self):
+        assert _score_to_grade(65) == "B"
+
+    def test_score_64_is_C(self):
+        assert _score_to_grade(64) == "C"
+
+    def test_score_50_is_C(self):
+        assert _score_to_grade(50) == "C"
+
+    def test_score_35_is_D(self):
+        assert _score_to_grade(35) == "D"
+
+    def test_score_34_is_F(self):
+        assert _score_to_grade(34) == "F"

@@ -2424,10 +2424,11 @@ class CharlieAnalyzer:
         """
         Analyze trends in a time series.
         """
-        values = time_series[metric_column].dropna().tolist()
+        mask = time_series[metric_column].notna()
+        values = time_series.loc[mask, metric_column].tolist()
 
         if period_column and period_column in time_series.columns:
-            periods = time_series[period_column].tolist()
+            periods = time_series.loc[mask, period_column].tolist()
         else:
             periods = [f"Period {i+1}" for i in range(len(values))]
 
@@ -2517,7 +2518,7 @@ class CharlieAnalyzer:
         Calculate budget variance.
         """
         variance = actual - budget
-        variance_percent = safe_divide(variance, abs(budget), default=0.0 if variance == 0 else float('inf'))
+        variance_percent = safe_divide(variance, abs(budget), default=0.0 if variance == 0 else None)
 
         # For expenses, under budget is favorable
         # For revenue, over budget is favorable

@@ -279,3 +279,60 @@ class TestRateLimiting:
         finally:
             api_module._RATE_LIMIT = old_limit
             api_module._rate_log.clear()
+
+
+# ---------------------------------------------------------------------------
+# Export endpoint coverage gaps (Coverage gap 4)
+# ---------------------------------------------------------------------------
+
+
+class TestExportEndpoints:
+    def test_export_xlsx_returns_501_when_no_analyzer(self, client, mock_rag):
+        mock_rag.charlie_analyzer = None
+        resp = client.post("/export/xlsx", json={
+            "financial_data": {"revenue": 1000},
+        })
+        assert resp.status_code == 501
+
+    def test_export_pdf_returns_501_when_no_analyzer(self, client, mock_rag):
+        mock_rag.charlie_analyzer = None
+        resp = client.post("/export/pdf", json={
+            "financial_data": {"revenue": 1000},
+        })
+        assert resp.status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# Analyze exception handling (Coverage gap 12)
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeExceptionHandling:
+    def test_analyze_exception_returns_422(self, client, mock_rag):
+        mock_rag.charlie_analyzer.generate_report.side_effect = ValueError("bad data")
+        resp = client.post("/analyze", json={
+            "financial_data": {"revenue": 1000},
+        })
+        assert resp.status_code == 422
+        assert "bad data" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Streaming error event (Coverage gap 11)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamErrorHandling:
+    def test_stream_llm_error_mid_stream(self, client, mock_rag):
+        """LLMConnectionError during streaming should emit error event."""
+        from local_llm import LLMConnectionError
+
+        def exploding_stream(*args, **kwargs):
+            yield "partial "
+            raise LLMConnectionError("model crashed")
+
+        mock_rag.answer_stream.return_value = exploding_stream()
+        resp = client.post("/query-stream", json={"text": "Test query"})
+        assert resp.status_code == 200
+        body = resp.text
+        assert "error" in body.lower() or "partial" in body

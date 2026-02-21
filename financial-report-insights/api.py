@@ -6,6 +6,7 @@ Wraps SimpleRAG, CharlieAnalyzer, and health checks as HTTP endpoints.
 import asyncio
 import io
 import logging
+import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -57,20 +58,23 @@ class DocumentInfo(BaseModel):
 # ---------------------------------------------------------------------------
 
 _rag_instance = None
+_rag_lock = threading.Lock()
 
 
 def _get_rag():
     """Lazy-initialise the RAG singleton (avoids slow startup when importing)."""
     global _rag_instance
     if _rag_instance is None:
-        import os
-        from app_local import SimpleRAG
-        _rag_instance = SimpleRAG(
-            docs_folder="./documents",
-            llm_model=os.getenv("OLLAMA_MODEL", settings.llm_model),
-            embedding_model=os.getenv("EMBEDDING_MODEL", settings.embedding_model),
-        )
-        logger.info("RAG engine initialised (%d chunks)", len(_rag_instance.documents))
+        with _rag_lock:
+            if _rag_instance is None:
+                import os
+                from app_local import SimpleRAG
+                _rag_instance = SimpleRAG(
+                    docs_folder="./documents",
+                    llm_model=os.getenv("OLLAMA_MODEL", settings.llm_model),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", settings.embedding_model),
+                )
+                logger.info("RAG engine initialised (%d chunks)", len(_rag_instance.documents))
     return _rag_instance
 
 

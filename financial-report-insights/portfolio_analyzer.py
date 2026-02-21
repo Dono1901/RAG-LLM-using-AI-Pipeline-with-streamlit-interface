@@ -287,6 +287,22 @@ class PortfolioAnalyzer:
         Returns:
             DiversificationScore with overall 0-100 rating.
         """
+        # Single or empty portfolio: no diversification possible
+        if len(companies) <= 1:
+            return DiversificationScore(
+                overall_score=0,
+                grade="F",
+                hhi_revenue=1.0,
+                hhi_assets=1.0,
+                correlation_penalty=0.0,
+                revenue_concentration="High",
+                asset_concentration="High",
+                interpretation=(
+                    "Diversification score 0/100 (Grade F). "
+                    "A portfolio with 1 or fewer companies has no diversification."
+                ),
+            )
+
         if correlation is None:
             correlation = self.correlation_matrix(companies)
 

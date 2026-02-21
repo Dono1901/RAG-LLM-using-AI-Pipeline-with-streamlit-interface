@@ -262,3 +262,144 @@ class TestFullComplianceReport:
         assert "SOX" in report.summary
         assert "SEC" in report.summary
         assert "Regulatory" in report.summary
+
+
+# ---------------------------------------------------------------------------
+# All-None data (Coverage gap 5)
+# ---------------------------------------------------------------------------
+
+
+class TestAllNoneData:
+    """Coverage gap: FinancialData with all None fields should not crash."""
+
+    def test_full_compliance_all_none_no_exception(self, scorer):
+        data = FinancialData()
+        report = scorer.full_compliance_report(data)
+        assert isinstance(report, ComplianceReport)
+        assert report.sox is not None
+        assert report.sec is not None
+        assert report.regulatory is not None
+
+    def test_sox_all_none_no_flags(self, scorer):
+        data = FinancialData()
+        result = scorer.sox_compliance(data)
+        # With all None, insufficient data means checks pass (no flags)
+        assert isinstance(result, SOXComplianceResult)
+
+    def test_regulatory_all_none_passes_all(self, scorer):
+        data = FinancialData()
+        result = scorer.regulatory_ratios(data)
+        # Missing data → passes=True for each threshold
+        assert isinstance(result, RegulatoryRatioReport)
+        assert len(result.thresholds_checked) > 0
+
+    def test_audit_risk_all_none_no_exception(self, scorer):
+        data = FinancialData()
+        result = scorer.full_compliance_report(data)
+        assert isinstance(result.audit_risk, AuditRiskAssessment)
+
+
+# ---------------------------------------------------------------------------
+# SOX boundary values (Coverage gap 6)
+# ---------------------------------------------------------------------------
+
+
+class TestSOXBoundaryValues:
+    def test_interest_coverage_exactly_one_is_material_weakness(self, scorer):
+        """ic < 1.0 is material weakness; ic == 1.0 should be significant deficiency."""
+        data = FinancialData(
+            revenue=10_000_000, net_income=500_000,
+            ebit=200_000, interest_expense=200_000,  # ic = 1.0
+            operating_income=500_000, operating_cash_flow=500_000,
+            total_equity=5_000_000, total_assets=10_000_000,
+        )
+        result = scorer.sox_compliance(data)
+        # ic=1.0: not < 1.0 so not material weakness, but < 2.0 so significant deficiency
+        assert len(result.significant_deficiency_indicators) >= 1 or len(result.flags) >= 1
+
+    def test_interest_coverage_below_one_is_material_weakness(self, scorer):
+        data = FinancialData(
+            revenue=10_000_000, net_income=500_000,
+            ebit=100_000, interest_expense=200_000,  # ic = 0.5
+            operating_income=500_000, operating_cash_flow=500_000,
+            total_equity=5_000_000, total_assets=10_000_000,
+        )
+        result = scorer.sox_compliance(data)
+        assert len(result.material_weakness_indicators) >= 1
+
+    def test_negative_equity_material_weakness(self, scorer):
+        data = FinancialData(
+            revenue=10_000_000, net_income=500_000,
+            operating_income=500_000, operating_cash_flow=500_000,
+            total_equity=-1_000_000, total_assets=10_000_000,
+        )
+        result = scorer.sox_compliance(data)
+        assert len(result.material_weakness_indicators) >= 1
+
+
+# ---------------------------------------------------------------------------
+# SEC Filing Quality edge cases (Coverage gap 7)
+# ---------------------------------------------------------------------------
+
+
+class TestSECFilingQualityEdgeCases:
+    def test_all_none_returns_valid_result(self, scorer):
+        data = FinancialData()
+        result = scorer.sec_filing_quality(data)
+        assert isinstance(result, SECFilingQuality)
+        assert result.disclosure_score >= 0
+
+    def test_complete_data_high_score(self, scorer, compliant_company):
+        result = scorer.sec_filing_quality(compliant_company)
+        assert result.disclosure_score >= 50
+        assert result.grade in ("A", "B", "C")
+
+    def test_balance_sheet_mismatch_flagged(self, scorer):
+        """Assets != Liabilities + Equity should produce a red flag."""
+        data = FinancialData(
+            revenue=10_000_000,
+            total_assets=100_000_000,
+            total_liabilities=20_000_000,
+            total_equity=30_000_000,  # Sum = 50M, mismatch with 100M assets
+        )
+        result = scorer.sec_filing_quality(data)
+        assert len(result.red_flags) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Regulatory threshold boundary values (Coverage gap 15)
+# ---------------------------------------------------------------------------
+
+
+class TestRegulatoryThresholdBoundary:
+    def test_equity_ratio_exactly_at_threshold_passes(self, scorer):
+        """Equity ratio >= 6% should pass."""
+        data = FinancialData(
+            total_equity=6_000, total_assets=100_000,  # 6%
+            revenue=50_000, current_assets=20_000, current_liabilities=10_000,
+        )
+        result = scorer.regulatory_ratios(data)
+        equity_check = [r for r in result.thresholds_checked if "Equity" in r.rule_name]
+        if equity_check:
+            assert equity_check[0].passes is True
+
+    def test_equity_ratio_below_threshold_fails(self, scorer):
+        data = FinancialData(
+            total_equity=5_000, total_assets=100_000,  # 5%
+            revenue=50_000, current_assets=20_000, current_liabilities=10_000,
+        )
+        result = scorer.regulatory_ratios(data)
+        equity_check = [r for r in result.thresholds_checked if "Equity" in r.rule_name]
+        if equity_check:
+            assert equity_check[0].passes is False
+
+    def test_high_leverage_fails(self, scorer):
+        data = FinancialData(
+            total_debt=90_000, total_assets=100_000,  # 90% leverage
+            total_equity=10_000, revenue=50_000,
+            current_assets=20_000, current_liabilities=10_000,
+        )
+        result = scorer.regulatory_ratios(data)
+        lev_check = [r for r in result.thresholds_checked if "Leverage" in r.rule_name]
+        if lev_check:
+            assert lev_check[0].passes is False

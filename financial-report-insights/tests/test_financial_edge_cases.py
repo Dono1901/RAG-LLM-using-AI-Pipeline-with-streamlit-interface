@@ -277,7 +277,7 @@ class TestVarianceEdgeCases:
     def test_zero_budget(self, analyzer):
         result = analyzer.calculate_variance(100, 0, "Revenue")
         assert result.variance == 100
-        assert result.variance_percent == float("inf")
+        assert result.variance_percent is None  # None instead of inf (JSON-safe)
 
     def test_both_zero(self, analyzer):
         result = analyzer.calculate_variance(0, 0, "Expense")
