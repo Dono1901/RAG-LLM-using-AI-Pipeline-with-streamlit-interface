@@ -546,7 +546,7 @@ class ComplianceScorer:
             )
 
         total = pass_count + fail_count
-        compliance_pct = (pass_count / total * 100) if total > 0 else 100.0
+        compliance_pct = (pass_count / total * 100) if total > 0 else 0.0
 
         return RegulatoryRatioReport(
             thresholds_checked=results,

@@ -3771,6 +3771,8 @@ class CharlieAnalyzer:
         Returns:
             MonteCarloResult with distributions and percentiles.
         """
+        n_simulations = min(n_simulations, 10_000)  # cap to prevent thread exhaustion
+
         if assumptions is None:
             assumptions = {}
             for fld in ['revenue', 'cogs', 'operating_expenses']:
@@ -3918,12 +3920,15 @@ class CharlieAnalyzer:
             growth_rates.append(round(revenue_growth * 100, 2))
 
         # Terminal value (Gordon Growth Model)
-        if discount_rate > terminal_growth:
+        # When discount_rate <= terminal_growth, GGM is undefined (infinite
+        # value).  We return None to signal the omission rather than a
+        # misleading 0.0.
+        if discount_rate > terminal_growth and fcf_list:
             terminal_fcf = fcf_list[-1] * (1 + terminal_growth)
             tv = terminal_fcf / (discount_rate - terminal_growth)
             pv_tv = tv / ((1 + discount_rate) ** periods)
         else:
-            tv = 0.0
+            tv = None
             pv_tv = 0.0
 
         dcf_value = pv_fcf_sum + pv_tv
@@ -3936,7 +3941,7 @@ class CharlieAnalyzer:
             cumulative_cash=cum_cash,
             fcf_forecast=fcf_list,
             dcf_value=round(dcf_value, 2),
-            terminal_value=round(tv, 2),
+            terminal_value=round(tv, 2) if tv is not None else None,
             discount_rate=discount_rate,
             growth_rates=growth_rates,
         )

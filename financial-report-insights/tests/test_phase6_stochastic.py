@@ -268,11 +268,11 @@ class TestPhase6EdgeCases:
         assert result.revenue_forecast[-1] > sample_data.revenue * 5
 
     def test_forecast_equal_discount_and_terminal(self, analyzer, sample_data):
-        """When discount_rate equals terminal_growth, terminal value should be 0."""
+        """When discount_rate equals terminal_growth, GGM is undefined."""
         result = analyzer.forecast_cashflow(
             sample_data, discount_rate=0.05, terminal_growth=0.05, periods=3
         )
-        assert result.terminal_value == 0.0
+        assert result.terminal_value is None  # undefined, not misleading 0.0
 
     def test_monte_carlo_extreme_std(self, analyzer, sample_data):
         """Very high uncertainty should not crash."""
