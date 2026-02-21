@@ -170,11 +170,7 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=501, detail="Financial analyzer not available.")
 
     try:
-        from financial_analyzer import FinancialData
-        # Build FinancialData from the dict, ignoring unknown keys
-        known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-        filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-        data = FinancialData(**filtered)
+        data = _parse_financial_data(req.financial_data)
 
         report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
         return {
@@ -369,11 +365,8 @@ class ExportRequest(BaseModel):
 async def export_xlsx(req: ExportRequest):
     """Export financial analysis as Excel workbook."""
     from export_xlsx import FinancialExcelExporter
-    from financial_analyzer import FinancialData
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-    data = FinancialData(**filtered)
+    data = _parse_financial_data(req.financial_data)
 
     rag = _get_rag()
     if not rag.charlie_analyzer:
@@ -396,11 +389,8 @@ async def export_xlsx(req: ExportRequest):
 async def export_pdf(req: ExportRequest):
     """Export financial analysis as PDF report."""
     from export_pdf import FinancialPDFExporter
-    from financial_analyzer import FinancialData
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-    data = FinancialData(**filtered)
+    data = _parse_financial_data(req.financial_data)
 
     rag = _get_rag()
     if not rag.charlie_analyzer:
@@ -426,7 +416,8 @@ async def export_pdf(req: ExportRequest):
 
 class PortfolioRequest(BaseModel):
     companies: Dict[str, Dict[str, Any]] = Field(
-        ..., description="Map of company_name -> financial_data dict"
+        ..., min_length=1,
+        description="Map of company_name -> financial_data dict (at least 1)",
     )
 
 
@@ -450,17 +441,25 @@ class CorrelationResponse(BaseModel):
     interpretation: str
 
 
+def _parse_financial_data(raw: Dict[str, Any]) -> "FinancialData":
+    """Parse a raw dict into FinancialData, filtering unknown fields."""
+    from financial_analyzer import FinancialData
+
+    if not hasattr(_parse_financial_data, "_fields"):
+        _parse_financial_data._fields = frozenset(FinancialData.__dataclass_fields__)
+    filtered = {k: v for k, v in raw.items() if k in _parse_financial_data._fields}
+    return FinancialData(**filtered)
+
+
 @app.post("/portfolio/analyze", response_model=PortfolioResponse)
 async def portfolio_analyze(req: PortfolioRequest):
     """Run full portfolio analysis across multiple companies."""
-    from financial_analyzer import FinancialData
     from portfolio_analyzer import PortfolioAnalyzer
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    companies = {}
-    for name, raw in req.companies.items():
-        filtered = {k: v for k, v in raw.items() if k in known_fields}
-        companies[name] = FinancialData(**filtered)
+    try:
+        companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
 
     pa = PortfolioAnalyzer()
     report = await asyncio.to_thread(pa.full_portfolio_analysis, companies)
@@ -481,14 +480,12 @@ async def portfolio_analyze(req: PortfolioRequest):
 @app.post("/portfolio/correlation", response_model=CorrelationResponse)
 async def portfolio_correlation(req: PortfolioRequest):
     """Compute correlation matrix across portfolio companies."""
-    from financial_analyzer import FinancialData
     from portfolio_analyzer import PortfolioAnalyzer
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    companies = {}
-    for name, raw in req.companies.items():
-        filtered = {k: v for k, v in raw.items() if k in known_fields}
-        companies[name] = FinancialData(**filtered)
+    try:
+        companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
 
     pa = PortfolioAnalyzer()
     corr = await asyncio.to_thread(pa.correlation_matrix, companies)
@@ -526,11 +523,11 @@ class ComplianceResponse(BaseModel):
 async def compliance_analyze(req: AnalyzeRequest):
     """Run full compliance analysis on financial data."""
     from compliance_scorer import ComplianceScorer
-    from financial_analyzer import FinancialData
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-    data = FinancialData(**filtered)
+    try:
+        data = _parse_financial_data(req.financial_data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
 
     cs = ComplianceScorer()
     report = await asyncio.to_thread(cs.full_compliance_report, data)
@@ -555,11 +552,11 @@ async def compliance_analyze(req: AnalyzeRequest):
 async def compliance_sox(req: AnalyzeRequest):
     """Run SOX compliance check only."""
     from compliance_scorer import ComplianceScorer
-    from financial_analyzer import FinancialData
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-    data = FinancialData(**filtered)
+    try:
+        data = _parse_financial_data(req.financial_data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
 
     cs = ComplianceScorer()
     sox = await asyncio.to_thread(cs.sox_compliance, data)
@@ -578,11 +575,11 @@ async def compliance_sox(req: AnalyzeRequest):
 async def compliance_regulatory(req: AnalyzeRequest):
     """Run regulatory threshold check only."""
     from compliance_scorer import ComplianceScorer
-    from financial_analyzer import FinancialData
 
-    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
-    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
-    data = FinancialData(**filtered)
+    try:
+        data = _parse_financial_data(req.financial_data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
 
     cs = ComplianceScorer()
     reg = await asyncio.to_thread(cs.regulatory_ratios, data)

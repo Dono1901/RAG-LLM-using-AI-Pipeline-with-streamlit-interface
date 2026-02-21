@@ -5137,18 +5137,17 @@ class CharlieAnalyzer:
             result.summary = f"{label}: Insufficient data for analysis."
             return result
 
-        # Step 4: Score from thresholds
+        # Step 4: Score from thresholds (callers MUST pass pre-sorted tuples)
         if higher_is_better:
             # Descending: find first threshold where value >= threshold
-            sorted_t = sorted(thresholds, key=lambda x: x[0], reverse=True)
-            base = max(sorted_t[-1][1] - 1.0, 0.0)
-            for thresh, sc in sorted_t:
+            base = max(thresholds[-1][1] - 1.0, 0.0)
+            for thresh, sc in thresholds:
                 if primary_val >= thresh:
                     base = sc
                     break
         else:
             # Ascending: find first threshold where value <= threshold
-            sorted_t = sorted(thresholds, key=lambda x: x[0])
+            sorted_t = thresholds
             base = max(sorted_t[-1][1] - 1.0, 0.0)
             for thresh, sc in sorted_t:
                 if primary_val <= thresh:

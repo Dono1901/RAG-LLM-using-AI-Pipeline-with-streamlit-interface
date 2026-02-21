@@ -48,7 +48,7 @@ class RegulatoryThreshold:
     metric_name: str = ""
     current_value: Optional[float] = None
     threshold_value: float = 0.0
-    passes: bool = False
+    passes: Optional[bool] = False  # None = insufficient data
     severity: str = "warning"  # info, warning, critical
 
 
@@ -526,11 +526,11 @@ class ComplianceScorer:
                 else:  # lte
                     passes = current <= threshold
             else:
-                passes = True  # Insufficient data, no flag
+                passes = None  # Insufficient data -- excluded from counts
 
-            if passes:
+            if passes is True:
                 pass_count += 1
-            else:
+            elif passes is False:
                 fail_count += 1
                 if severity == "critical":
                     critical_failures.append(

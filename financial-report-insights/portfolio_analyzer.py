@@ -250,12 +250,12 @@ class PortfolioAnalyzer:
 
         matrix_list = corr.tolist()
 
-        # Average off-diagonal correlation
-        off_diag = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                off_diag.append(corr[i, j])
-        avg_corr = float(np.mean(off_diag)) if off_diag else 0.0
+        # Average off-diagonal correlation (vectorized upper triangle)
+        if n > 1:
+            mask = np.triu(np.ones((n, n), dtype=bool), k=1)
+            avg_corr = float(corr[mask].mean())
+        else:
+            avg_corr = 0.0
 
         if avg_corr > 0.7:
             interp = (

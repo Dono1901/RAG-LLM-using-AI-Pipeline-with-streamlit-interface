@@ -7771,7 +7771,7 @@ class FinancialInsightsPage:
             companies[sheet.name] = data
         return companies
 
-    def _render_portfolio_overview(self, workbook):
+    def _render_portfolio_overview(self, df: pd.DataFrame, workbook):
         """Render portfolio overview from multi-sheet workbook."""
         from portfolio_analyzer import PortfolioAnalyzer
 
@@ -7800,7 +7800,7 @@ class FinancialInsightsPage:
 
         st.markdown(f"**Summary:** {report.summary}")
 
-    def _render_portfolio_correlation(self, workbook):
+    def _render_portfolio_correlation(self, df: pd.DataFrame, workbook):
         """Render correlation matrix for portfolio companies."""
         from portfolio_analyzer import PortfolioAnalyzer
 
@@ -7818,7 +7818,7 @@ class FinancialInsightsPage:
         corr_df = pd.DataFrame(corr.matrix, index=corr.company_names, columns=corr.company_names)
         st.dataframe(corr_df.style.background_gradient(cmap="RdYlGn_r", vmin=-1, vmax=1), use_container_width=True)
 
-    def _render_portfolio_diversification(self, workbook):
+    def _render_portfolio_diversification(self, df: pd.DataFrame, workbook):
         """Render diversification score for portfolio."""
         from portfolio_analyzer import PortfolioAnalyzer
 
@@ -7902,9 +7902,13 @@ class FinancialInsightsPage:
 
         st.subheader("Threshold Details")
         for t in reg.thresholds_checked:
-            icon = "pass" if t.passes else "fail"
             val_str = f"{t.current_value:.4f}" if t.current_value is not None else "N/A"
-            status = "PASS" if t.passes else "FAIL"
+            if t.passes is None:
+                status = "N/A (insufficient data)"
+            elif t.passes:
+                status = "PASS"
+            else:
+                status = "FAIL"
             st.markdown(f"- **{t.rule_name}** ({t.framework}): {val_str} vs {t.threshold_value} -- {status}")
 
     def _render_audit_risk(self, df: pd.DataFrame):

@@ -110,8 +110,8 @@ def _compute_base_score(
     if not scoring_thresholds:
         return 5.0  # Default mid-range score
 
-    # Sort thresholds descending by threshold value
-    sorted_thresholds = sorted(scoring_thresholds, key=lambda x: x[0], reverse=True)
+    # Thresholds must be pre-sorted descending by threshold value
+    sorted_thresholds = scoring_thresholds
 
     if higher_is_better:
         # Standard logic: higher ratio = higher score
