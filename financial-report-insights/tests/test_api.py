@@ -235,3 +235,47 @@ class TestDocumentsEndpoint:
         resp = client.get("/documents")
         docs = resp.json()
         assert len(docs) == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimiting:
+    def test_rate_limit_enforced(self, client):
+        """Exceed rate limit and verify 429 response."""
+        import api as api_module
+        # Reset rate log
+        api_module._rate_log.clear()
+        old_limit = api_module._RATE_LIMIT
+        api_module._RATE_LIMIT = 3  # lower for test speed
+        try:
+            with patch("api.get_health_status", return_value={"healthy": True, "status": "ok", "checks": []}):
+                for _ in range(3):
+                    resp = client.get("/documents")
+                    assert resp.status_code == 200
+                # 4th request should be rate-limited
+                resp = client.get("/documents")
+                assert resp.status_code == 429
+                assert "Rate limit" in resp.json()["detail"]
+        finally:
+            api_module._RATE_LIMIT = old_limit
+            api_module._rate_log.clear()
+
+    def test_health_exempt_from_rate_limit(self, client):
+        """Health endpoint should bypass rate limiting."""
+        import api as api_module
+        api_module._rate_log.clear()
+        old_limit = api_module._RATE_LIMIT
+        api_module._RATE_LIMIT = 1
+        try:
+            with patch("api.get_health_status", return_value={"healthy": True, "status": "ok", "checks": []}):
+                # Exhaust rate limit
+                client.get("/documents")
+                # /health should still work
+                resp = client.get("/health")
+                assert resp.status_code == 200
+        finally:
+            api_module._RATE_LIMIT = old_limit
+            api_module._rate_log.clear()

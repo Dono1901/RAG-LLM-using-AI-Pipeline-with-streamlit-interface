@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     # API
     api_port: int = 8504
+    cors_origins: str = "http://localhost:8501"  # Comma-separated allowed origins
 
     # Export
     export_max_ratios: int = 200  # Max ratios per export

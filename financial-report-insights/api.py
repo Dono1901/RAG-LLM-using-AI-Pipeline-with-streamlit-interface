@@ -6,13 +6,15 @@ Wraps SimpleRAG, CharlieAnalyzer, and health checks as HTTP endpoints.
 import asyncio
 import io
 import logging
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -91,10 +93,39 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Simple in-memory rate limiter (per-IP, sliding window)
+# ---------------------------------------------------------------------------
+
+_RATE_WINDOW = 60  # seconds
+_RATE_LIMIT = 60  # max requests per window
+_rate_log: Dict[str, List[float]] = defaultdict(list)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Enforce per-IP request rate limit. Skips /health for monitoring."""
+    if request.url.path == "/health":
+        return await call_next(request)
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    # Prune expired entries
+    timestamps = _rate_log[client_ip]
+    cutoff = now - _RATE_WINDOW
+    _rate_log[client_ip] = [t for t in timestamps if t > cutoff]
+    if len(_rate_log[client_ip]) >= _RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again later."},
+        )
+    _rate_log[client_ip].append(now)
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
