@@ -2446,7 +2446,7 @@ class FinancialInsightsPage:
                 fig.update_layout(title="DuPont Factor Values", yaxis_title="Value")
                 st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
     def _render_credit_rating(self, df: pd.DataFrame):
         """Render Credit Rating tab."""
@@ -2493,7 +2493,7 @@ class FinancialInsightsPage:
             fig.update_layout(title="Category Scores", yaxis_title="Score (0-10)", yaxis_range=[0, 10])
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
     def _render_variance_waterfall(self, df: pd.DataFrame, workbook):
         """Render Variance Waterfall tab."""
@@ -2571,7 +2571,7 @@ class FinancialInsightsPage:
             fig.update_layout(title="Net Income Bridge", yaxis_title="Amount")
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
     def _render_earnings_quality(self, df: pd.DataFrame):
         """Render Earnings Quality tab."""
@@ -2631,7 +2631,7 @@ class FinancialInsightsPage:
             )
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
@@ -2715,7 +2715,7 @@ class FinancialInsightsPage:
                 )
                 st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
@@ -2778,7 +2778,7 @@ class FinancialInsightsPage:
             fig.update_layout(title="Cash Survival Under Revenue Shocks", yaxis_title="Months")
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
@@ -2843,7 +2843,7 @@ class FinancialInsightsPage:
             )
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         # --- Horizontal bar chart ---
         try:
@@ -2866,7 +2866,7 @@ class FinancialInsightsPage:
             )
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
@@ -2936,7 +2936,7 @@ class FinancialInsightsPage:
                 fig.update_layout(title="Cost Structure Split", height=350)
                 st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         # --- Break-even chart ---
         try:
@@ -2978,7 +2978,7 @@ class FinancialInsightsPage:
                 )
                 st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
@@ -3063,7 +3063,7 @@ class FinancialInsightsPage:
                 )
                 st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            pass
+            logger.debug("Chart render skipped", exc_info=True)
 
         st.caption(result.summary)
 
