@@ -1,6 +1,7 @@
 """Tests for the Neo4j graph store layer (graph_store.py + graph_schema.py)."""
 
 import hashlib
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -570,3 +571,39 @@ class TestGraphStoreReadErrorPaths:
         store = self._make_store_with_failing_session()
         result = store.cross_period_ratio_trend([])
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# NEO4J_PASSWORD requirement (M-06)
+# ---------------------------------------------------------------------------
+
+
+class TestNeo4jPasswordRequired:
+    def test_connect_without_password_returns_none(self):
+        """Neo4jStore.connect() must refuse when NEO4J_PASSWORD is empty."""
+        from graph_store import Neo4jStore
+        env = {"NEO4J_URI": "bolt://localhost:7687", "NEO4J_USERNAME": "neo4j"}
+        with patch.dict("os.environ", env, clear=False):
+            # Ensure NEO4J_PASSWORD is NOT in the env
+            import os
+            os.environ.pop("NEO4J_PASSWORD", None)
+            result = Neo4jStore.connect()
+            assert result is None
+
+    def test_connect_with_password_attempts_driver(self):
+        """When NEO4J_PASSWORD is set, connect() proceeds to create driver."""
+        from graph_store import Neo4jStore
+        env = {
+            "NEO4J_URI": "bolt://localhost:7687",
+            "NEO4J_USERNAME": "neo4j",
+            "NEO4J_PASSWORD": "test-secret",
+        }
+        mock_neo4j = MagicMock()
+        mock_driver = MagicMock()
+        mock_neo4j.GraphDatabase.driver.return_value = mock_driver
+        with patch.dict("os.environ", env, clear=False):
+            with patch.dict("sys.modules", {"neo4j": mock_neo4j}):
+                store = Neo4jStore.connect()
+                assert store is not None
+                mock_neo4j.GraphDatabase.driver.assert_called_once()
+                mock_driver.verify_connectivity.assert_called_once()

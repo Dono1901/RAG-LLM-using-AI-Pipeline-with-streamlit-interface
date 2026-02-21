@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from config import settings
@@ -45,6 +45,15 @@ class QueryResponse(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     financial_data: Dict[str, Any]
+
+    @field_validator("financial_data")
+    @classmethod
+    def validate_field_count(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if len(v) > settings.max_financial_fields:
+            raise ValueError(
+                f"Too many fields ({len(v)}); max {settings.max_financial_fields}."
+            )
+        return v
 
 
 class DocumentInfo(BaseModel):
@@ -110,6 +119,18 @@ app.add_middleware(
 _RATE_WINDOW = 60  # seconds
 _RATE_LIMIT = 60  # max requests per window
 _rate_log: Dict[str, List[float]] = defaultdict(list)
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    """Reject request bodies exceeding the configured size limit."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.max_request_body_bytes:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large."},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -214,7 +235,11 @@ async def analyze(req: AnalyzeRequest):
             "generated_at": report.generated_at,
         }
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        logger.warning("Analyze request failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=422,
+            detail="Could not process the provided financial data.",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +519,11 @@ async def portfolio_analyze(req: PortfolioRequest):
     try:
         companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
+        logger.warning("Invalid financial data in request: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid financial data format.",
+        ) from exc
 
     pa = PortfolioAnalyzer()
     report = await asyncio.to_thread(pa.full_portfolio_analysis, companies)
@@ -520,7 +549,11 @@ async def portfolio_correlation(req: PortfolioRequest):
     try:
         companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
+        logger.warning("Invalid financial data in request: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid financial data format.",
+        ) from exc
 
     pa = PortfolioAnalyzer()
     corr = await asyncio.to_thread(pa.correlation_matrix, companies)
@@ -562,7 +595,11 @@ async def compliance_analyze(req: AnalyzeRequest):
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
+        logger.warning("Invalid financial data in request: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid financial data format.",
+        ) from exc
 
     cs = ComplianceScorer()
     report = await asyncio.to_thread(cs.full_compliance_report, data)
@@ -591,7 +628,11 @@ async def compliance_sox(req: AnalyzeRequest):
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
+        logger.warning("Invalid financial data in request: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid financial data format.",
+        ) from exc
 
     cs = ComplianceScorer()
     sox = await asyncio.to_thread(cs.sox_compliance, data)
@@ -614,7 +655,11 @@ async def compliance_regulatory(req: AnalyzeRequest):
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid financial data: {exc}") from exc
+        logger.warning("Invalid financial data in request: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid financial data format.",
+        ) from exc
 
     cs = ComplianceScorer()
     reg = await asyncio.to_thread(cs.regulatory_ratios, data)

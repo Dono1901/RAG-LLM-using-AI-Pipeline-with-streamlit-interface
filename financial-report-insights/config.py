@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # API
     api_port: int = 8504
     cors_origins: str = "http://localhost:8501"  # Comma-separated allowed origins
+    max_request_body_bytes: int = 1_048_576  # 1 MB max request body
+    max_financial_fields: int = 200  # Max fields in a financial_data dict
 
     # Export
     export_max_ratios: int = 200  # Max ratios per export

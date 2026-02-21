@@ -377,6 +377,13 @@ class LocalEmbedder:
 
         self.model_name = model_name
         host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        # Validate URL scheme to prevent SSRF via malicious OLLAMA_HOST
+        from urllib.parse import urlparse
+        parsed = urlparse(host)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"OLLAMA_HOST must use http or https scheme, got: {parsed.scheme!r}"
+            )
         self._url = f"{host.rstrip('/')}/v1/embeddings"
         self._client = httpx.Client(timeout=60.0)
         # Use configured dimension to avoid probe HTTP request

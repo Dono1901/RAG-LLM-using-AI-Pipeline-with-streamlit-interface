@@ -48,7 +48,12 @@ class Neo4jStore:
             import neo4j
             uri = os.environ["NEO4J_URI"]
             username = os.environ.get("NEO4J_USERNAME", "neo4j")
-            password = os.environ.get("NEO4J_PASSWORD", "password")
+            password = os.environ.get("NEO4J_PASSWORD", "")
+            if not password:
+                logger.error(
+                    "NEO4J_PASSWORD is not set. Refusing to connect without credentials."
+                )
+                return None
             driver = neo4j.GraphDatabase.driver(uri, auth=(username, password))
             driver.verify_connectivity()
             logger.info("Connected to Neo4j at %s", uri)

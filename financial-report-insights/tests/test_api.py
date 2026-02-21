@@ -314,7 +314,7 @@ class TestAnalyzeExceptionHandling:
             "financial_data": {"revenue": 1000},
         })
         assert resp.status_code == 422
-        assert "bad data" in resp.json()["detail"]
+        assert "Could not process" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -336,3 +336,50 @@ class TestStreamErrorHandling:
         assert resp.status_code == 200
         body = resp.text
         assert "error" in body.lower() or "partial" in body
+
+
+# ---------------------------------------------------------------------------
+# Body size limit middleware (M-03)
+# ---------------------------------------------------------------------------
+
+
+class TestBodySizeLimit:
+    def test_oversized_content_length_rejected(self, client):
+        """Request with Content-Length > max_request_body_bytes gets 413."""
+        resp = client.post(
+            "/analyze",
+            json={"financial_data": {"revenue": 1}},
+            headers={"Content-Length": "999999999"},
+        )
+        assert resp.status_code == 413
+        assert "too large" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Field count validator (M-02)
+# ---------------------------------------------------------------------------
+
+
+class TestFieldCountValidator:
+    def test_too_many_fields_rejected(self, client, mock_rag):
+        """Financial data with 201+ fields should be rejected."""
+        huge_data = {f"field_{i}": i for i in range(250)}
+        resp = client.post("/analyze", json={"financial_data": huge_data})
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Error message sanitization (M-01)
+# ---------------------------------------------------------------------------
+
+
+class TestErrorSanitization:
+    def test_analyze_error_does_not_leak_details(self, client, mock_rag):
+        """Internal exception details must not appear in the response."""
+        mock_rag.charlie_analyzer.generate_report.side_effect = RuntimeError(
+            "SECRET_DB_CONNECTION_STRING"
+        )
+        resp = client.post("/analyze", json={"financial_data": {"revenue": 1000}})
+        assert resp.status_code == 422
+        assert "SECRET_DB_CONNECTION_STRING" not in resp.json()["detail"]
+        assert "Could not process" in resp.json()["detail"]

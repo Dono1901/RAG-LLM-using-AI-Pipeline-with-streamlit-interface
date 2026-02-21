@@ -940,5 +940,30 @@ class TestContentHashCacheKey:
             tmp_path.unlink()
 
 
+# ============================================================
+# OLLAMA_HOST URL Validation (M-05)
+# ============================================================
+
+
+class TestOllamaHostValidation:
+    def test_ftp_scheme_rejected(self):
+        """Non-HTTP schemes should raise ValueError."""
+        with patch.dict("os.environ", {"OLLAMA_HOST": "ftp://evil.com"}):
+            with pytest.raises(ValueError, match="http or https"):
+                LocalEmbedder("test-model")
+
+    def test_http_scheme_accepted(self):
+        """Standard HTTP should work."""
+        with patch.dict("os.environ", {"OLLAMA_HOST": "http://localhost:11434"}):
+            embedder = LocalEmbedder("test-model")
+            assert "http://localhost:11434" in embedder._url
+
+    def test_https_scheme_accepted(self):
+        """HTTPS should work."""
+        with patch.dict("os.environ", {"OLLAMA_HOST": "https://secure.host:443"}):
+            embedder = LocalEmbedder("test-model")
+            assert "https://secure.host:443" in embedder._url
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
