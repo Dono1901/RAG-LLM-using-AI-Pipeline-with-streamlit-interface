@@ -419,6 +419,193 @@ async def export_pdf(req: ExportRequest):
     )
 
 
+# ---------------------------------------------------------------------------
+# Portfolio endpoints (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class PortfolioRequest(BaseModel):
+    companies: Dict[str, Dict[str, Any]] = Field(
+        ..., description="Map of company_name -> financial_data dict"
+    )
+
+
+class PortfolioResponse(BaseModel):
+    num_companies: int
+    avg_health_score: float
+    diversification_score: int
+    diversification_grade: str
+    risk_level: str
+    risk_flags: List[str]
+    strongest: str
+    weakest: str
+    summary: str
+
+
+class CorrelationResponse(BaseModel):
+    company_names: List[str]
+    ratio_names: List[str]
+    matrix: List[List[float]]
+    avg_correlation: float
+    interpretation: str
+
+
+@app.post("/portfolio/analyze", response_model=PortfolioResponse)
+async def portfolio_analyze(req: PortfolioRequest):
+    """Run full portfolio analysis across multiple companies."""
+    from financial_analyzer import FinancialData
+    from portfolio_analyzer import PortfolioAnalyzer
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    companies = {}
+    for name, raw in req.companies.items():
+        filtered = {k: v for k, v in raw.items() if k in known_fields}
+        companies[name] = FinancialData(**filtered)
+
+    pa = PortfolioAnalyzer()
+    report = await asyncio.to_thread(pa.full_portfolio_analysis, companies)
+
+    return PortfolioResponse(
+        num_companies=report.num_companies,
+        avg_health_score=report.risk_summary.avg_health_score,
+        diversification_score=report.diversification.overall_score,
+        diversification_grade=report.diversification.grade,
+        risk_level=report.risk_summary.overall_risk_level,
+        risk_flags=report.risk_summary.risk_flags,
+        strongest=report.risk_summary.strongest_company,
+        weakest=report.risk_summary.weakest_company,
+        summary=report.summary,
+    )
+
+
+@app.post("/portfolio/correlation", response_model=CorrelationResponse)
+async def portfolio_correlation(req: PortfolioRequest):
+    """Compute correlation matrix across portfolio companies."""
+    from financial_analyzer import FinancialData
+    from portfolio_analyzer import PortfolioAnalyzer
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    companies = {}
+    for name, raw in req.companies.items():
+        filtered = {k: v for k, v in raw.items() if k in known_fields}
+        companies[name] = FinancialData(**filtered)
+
+    pa = PortfolioAnalyzer()
+    corr = await asyncio.to_thread(pa.correlation_matrix, companies)
+
+    return CorrelationResponse(
+        company_names=corr.company_names,
+        ratio_names=corr.ratio_names,
+        matrix=corr.matrix,
+        avg_correlation=corr.avg_correlation,
+        interpretation=corr.interpretation,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compliance endpoints (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class ComplianceResponse(BaseModel):
+    sox_risk: str
+    sox_score: int
+    sec_score: int
+    sec_grade: str
+    regulatory_pct: float
+    regulatory_pass: int
+    regulatory_fail: int
+    audit_risk: str
+    audit_score: int
+    audit_grade: str
+    going_concern: bool
+    summary: str
+
+
+@app.post("/compliance/analyze", response_model=ComplianceResponse)
+async def compliance_analyze(req: AnalyzeRequest):
+    """Run full compliance analysis on financial data."""
+    from compliance_scorer import ComplianceScorer
+    from financial_analyzer import FinancialData
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
+    data = FinancialData(**filtered)
+
+    cs = ComplianceScorer()
+    report = await asyncio.to_thread(cs.full_compliance_report, data)
+
+    return ComplianceResponse(
+        sox_risk=report.sox.overall_risk,
+        sox_score=report.sox.risk_score,
+        sec_score=report.sec.disclosure_score,
+        sec_grade=report.sec.grade,
+        regulatory_pct=report.regulatory.compliance_pct,
+        regulatory_pass=report.regulatory.pass_count,
+        regulatory_fail=report.regulatory.fail_count,
+        audit_risk=report.audit_risk.risk_level,
+        audit_score=report.audit_risk.score,
+        audit_grade=report.audit_risk.grade,
+        going_concern=report.audit_risk.going_concern_risk,
+        summary=report.summary,
+    )
+
+
+@app.post("/compliance/sox")
+async def compliance_sox(req: AnalyzeRequest):
+    """Run SOX compliance check only."""
+    from compliance_scorer import ComplianceScorer
+    from financial_analyzer import FinancialData
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
+    data = FinancialData(**filtered)
+
+    cs = ComplianceScorer()
+    sox = await asyncio.to_thread(cs.sox_compliance, data)
+    return {
+        "overall_risk": sox.overall_risk,
+        "risk_score": sox.risk_score,
+        "flags": sox.flags,
+        "material_weakness_indicators": sox.material_weakness_indicators,
+        "significant_deficiency_indicators": sox.significant_deficiency_indicators,
+        "checks_performed": sox.checks_performed,
+        "checks_passed": sox.checks_passed,
+    }
+
+
+@app.post("/compliance/regulatory")
+async def compliance_regulatory(req: AnalyzeRequest):
+    """Run regulatory threshold check only."""
+    from compliance_scorer import ComplianceScorer
+    from financial_analyzer import FinancialData
+
+    known_fields = {f.name for f in FinancialData.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in req.financial_data.items() if k in known_fields}
+    data = FinancialData(**filtered)
+
+    cs = ComplianceScorer()
+    reg = await asyncio.to_thread(cs.regulatory_ratios, data)
+    return {
+        "pass_count": reg.pass_count,
+        "fail_count": reg.fail_count,
+        "compliance_pct": reg.compliance_pct,
+        "critical_failures": reg.critical_failures,
+        "thresholds": [
+            {
+                "rule_name": t.rule_name,
+                "framework": t.framework,
+                "metric_name": t.metric_name,
+                "current_value": t.current_value,
+                "threshold_value": t.threshold_value,
+                "passes": t.passes,
+                "severity": t.severity,
+            }
+            for t in reg.thresholds_checked
+        ],
+    }
+
+
 @app.get("/documents", response_model=List[DocumentInfo])
 async def list_documents():
     """List indexed document chunks."""

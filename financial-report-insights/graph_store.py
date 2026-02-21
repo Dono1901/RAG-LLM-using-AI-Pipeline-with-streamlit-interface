@@ -594,6 +594,133 @@ class Neo4jStore:
             return []
 
     # ------------------------------------------------------------------
+    # Portfolio & compliance storage (Phase 7)
+    # ------------------------------------------------------------------
+
+    def store_portfolio_analysis(
+        self,
+        portfolio_name: str,
+        company_names: List[str],
+        risk_summary,
+        diversification_score: int = 0,
+    ) -> Optional[str]:
+        """Persist portfolio analysis as Portfolio + PortfolioRisk graph nodes.
+
+        Creates or merges a :Portfolio node, links :Company nodes via
+        CONTAINS_COMPANY, and creates a :PortfolioRisk summary node.
+
+        Args:
+            portfolio_name: Name for the portfolio.
+            company_names: List of company names in the portfolio.
+            risk_summary: PortfolioRiskSummary instance from portfolio_analyzer.
+            diversification_score: Overall diversification score (0-100).
+
+        Returns:
+            portfolio_id string if successful, None on failure.
+        """
+        import json
+        from graph_schema import (
+            MERGE_PORTFOLIO,
+            MERGE_PORTFOLIO_MEMBERSHIP_BATCH,
+            MERGE_PORTFOLIO_RISK,
+        )
+
+        portfolio_id = hashlib.sha256(
+            f"{portfolio_name}:{','.join(sorted(company_names))}".encode()
+        ).hexdigest()
+
+        risk_id = hashlib.sha256(
+            f"{portfolio_id}:risk:{risk_summary.overall_risk_level}".encode()
+        ).hexdigest()
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_PORTFOLIO, portfolio_id=portfolio_id, name=portfolio_name)
+                session.run(
+                    MERGE_PORTFOLIO_MEMBERSHIP_BATCH,
+                    portfolio_id=portfolio_id,
+                    company_names=company_names,
+                )
+                session.run(
+                    MERGE_PORTFOLIO_RISK,
+                    risk_id=risk_id,
+                    portfolio_id=portfolio_id,
+                    avg_health=float(risk_summary.avg_health_score),
+                    min_health=risk_summary.min_health_score,
+                    max_health=risk_summary.max_health_score,
+                    risk_level=risk_summary.overall_risk_level,
+                    distress_count=risk_summary.distress_count,
+                    diversification_score=diversification_score,
+                    risk_flags=list(risk_summary.risk_flags),
+                )
+            logger.info(
+                "Stored portfolio analysis %s (%d companies, risk=%s)",
+                portfolio_name,
+                len(company_names),
+                risk_summary.overall_risk_level,
+            )
+            return portfolio_id
+        except Exception as exc:
+            logger.warning("Neo4j store_portfolio_analysis failed: %s", exc)
+            return None
+
+    def store_compliance_report(
+        self,
+        company_name: str,
+        compliance_report,
+    ) -> Optional[str]:
+        """Persist a ComplianceReport as a graph node linked to :Company.
+
+        Uses UNWIND batching for the compliance write.
+
+        Args:
+            company_name: Company identifier.
+            compliance_report: ComplianceReport instance from compliance_scorer.
+
+        Returns:
+            compliance_id string if successful, None on failure.
+        """
+        from graph_schema import MERGE_COMPANY, MERGE_COMPLIANCE_REPORT_BATCH
+
+        sox = compliance_report.sox
+        sec = compliance_report.sec
+        reg = compliance_report.regulatory
+        audit = compliance_report.audit_risk
+
+        compliance_id = hashlib.sha256(
+            f"{company_name}:compliance:{audit.score if audit else 0}".encode()
+        ).hexdigest()
+
+        batch = [
+            {
+                "compliance_id": compliance_id,
+                "company_name": company_name,
+                "sox_risk": sox.overall_risk if sox else "unknown",
+                "sox_score": sox.risk_score if sox else 0,
+                "sec_score": sec.disclosure_score if sec else 0,
+                "regulatory_pct": reg.compliance_pct if reg else 0.0,
+                "audit_risk": audit.risk_level if audit else "unknown",
+                "audit_score": audit.score if audit else 0,
+                "going_concern": audit.going_concern_risk if audit else False,
+            }
+        ]
+
+        try:
+            with self._driver.session() as session:
+                session.run(MERGE_COMPANY, name=company_name)
+                session.run(MERGE_COMPLIANCE_REPORT_BATCH, batch=batch)
+            logger.info(
+                "Stored compliance report %s for %s (audit=%s)",
+                compliance_id[:8],
+                company_name,
+                audit.risk_level if audit else "unknown",
+            )
+            return compliance_id
+        except Exception as exc:
+            logger.warning("Neo4j store_compliance_report failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

@@ -197,6 +197,17 @@ class FinancialInsightsPage:
             ("Burn & Runway", "_render_burn_runway", False),
             ("Funding Scenarios", "_render_funding_scenarios", False),
         ],
+        "Portfolio Analysis": [
+            ("Portfolio Overview", "_render_portfolio_overview", True),
+            ("Correlation Matrix", "_render_portfolio_correlation", True),
+            ("Diversification", "_render_portfolio_diversification", True),
+        ],
+        "Regulatory & Compliance": [
+            ("SOX Compliance", "_render_sox_compliance", False),
+            ("SEC Filing Quality", "_render_sec_filing_quality", False),
+            ("Regulatory Thresholds", "_render_regulatory_thresholds", False),
+            ("Audit Risk", "_render_audit_risk", False),
+        ],
     }
 
     def __init__(self, docs_folder: str = "./documents"):
@@ -7749,6 +7760,177 @@ class FinancialInsightsPage:
                 "financial_data.csv",
                 "text/csv"
             )
+
+    # ===== PORTFOLIO ANALYSIS TABS =====
+
+    def _sheets_to_companies(self, workbook) -> Dict[str, "FinancialData"]:
+        """Convert workbook sheets to a dict of company name -> FinancialData."""
+        companies = {}
+        for sheet in workbook.sheets:
+            data = self.analyzer._dataframe_to_financial_data(sheet.df)
+            companies[sheet.name] = data
+        return companies
+
+    def _render_portfolio_overview(self, workbook):
+        """Render portfolio overview from multi-sheet workbook."""
+        from portfolio_analyzer import PortfolioAnalyzer
+
+        companies = self._sheets_to_companies(workbook)
+        if len(companies) < 2:
+            st.info("Upload a workbook with multiple sheets (one per company) for portfolio analysis.")
+            return
+
+        pa = PortfolioAnalyzer(self.analyzer)
+        report = pa.full_portfolio_analysis(companies)
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Companies", report.num_companies)
+        col2.metric("Avg Health", f"{report.risk_summary.avg_health_score:.0f}/100")
+        col3.metric("Risk Level", report.risk_summary.overall_risk_level.title())
+        col4.metric("Diversification", f"{report.diversification.overall_score}/100")
+
+        st.subheader("Company Health Scores")
+        for snap in sorted(report.snapshots, key=lambda s: s.health_score, reverse=True):
+            st.progress(snap.health_score / 100, text=f"{snap.name}: {snap.health_score}/100 (Grade {snap.health_grade})")
+
+        if report.risk_summary.risk_flags:
+            st.subheader("Risk Flags")
+            for flag in report.risk_summary.risk_flags:
+                st.warning(flag)
+
+        st.markdown(f"**Summary:** {report.summary}")
+
+    def _render_portfolio_correlation(self, workbook):
+        """Render correlation matrix for portfolio companies."""
+        from portfolio_analyzer import PortfolioAnalyzer
+
+        companies = self._sheets_to_companies(workbook)
+        if len(companies) < 2:
+            st.info("Need at least 2 sheets (companies) for correlation analysis.")
+            return
+
+        pa = PortfolioAnalyzer(self.analyzer)
+        corr = pa.correlation_matrix(companies)
+
+        st.metric("Avg Correlation", f"{corr.avg_correlation:.2f}")
+        st.markdown(f"**Interpretation:** {corr.interpretation}")
+
+        corr_df = pd.DataFrame(corr.matrix, index=corr.company_names, columns=corr.company_names)
+        st.dataframe(corr_df.style.background_gradient(cmap="RdYlGn_r", vmin=-1, vmax=1), use_container_width=True)
+
+    def _render_portfolio_diversification(self, workbook):
+        """Render diversification score for portfolio."""
+        from portfolio_analyzer import PortfolioAnalyzer
+
+        companies = self._sheets_to_companies(workbook)
+        if len(companies) < 2:
+            st.info("Need at least 2 sheets (companies) for diversification scoring.")
+            return
+
+        pa = PortfolioAnalyzer(self.analyzer)
+        div = pa.diversification_score(companies)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Overall Score", f"{div.overall_score}/100 ({div.grade})")
+        col2.metric("Revenue HHI", f"{div.hhi_revenue:.3f}")
+        col3.metric("Asset HHI", f"{div.hhi_assets:.3f}")
+
+        st.markdown(f"- Revenue concentration: **{div.revenue_concentration}**")
+        st.markdown(f"- Asset concentration: **{div.asset_concentration}**")
+        st.markdown(f"- Avg correlation penalty: **{div.correlation_penalty:.2f}**")
+        st.markdown(f"**{div.interpretation}**")
+
+    # ===== REGULATORY & COMPLIANCE TABS =====
+
+    def _render_sox_compliance(self, df: pd.DataFrame):
+        """Render SOX compliance assessment."""
+        from compliance_scorer import ComplianceScorer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        cs = ComplianceScorer(self.analyzer)
+        sox = cs.sox_compliance(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("SOX Risk", sox.overall_risk.title())
+        col2.metric("Risk Score", f"{sox.risk_score}/100")
+        col3.metric("Checks Passed", f"{sox.checks_passed}/{sox.checks_performed}")
+
+        if sox.material_weakness_indicators:
+            st.error("**Material Weaknesses:** " + "; ".join(sox.material_weakness_indicators))
+        if sox.significant_deficiency_indicators:
+            st.warning("**Significant Deficiencies:** " + "; ".join(sox.significant_deficiency_indicators))
+        if sox.flags:
+            st.subheader("Detailed Flags")
+            for flag in sox.flags:
+                st.markdown(f"- {flag}")
+
+    def _render_sec_filing_quality(self, df: pd.DataFrame):
+        """Render SEC filing quality assessment."""
+        from compliance_scorer import ComplianceScorer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        cs = ComplianceScorer(self.analyzer)
+        sec = cs.sec_filing_quality(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Disclosure Score", f"{sec.disclosure_score}/100")
+        col2.metric("Grade", sec.grade)
+        col3.metric("Completeness", f"{sec.data_completeness_pct:.0f}%")
+
+        if sec.missing_critical_fields:
+            st.warning("**Missing Critical Fields:** " + ", ".join(sec.missing_critical_fields))
+        if sec.red_flags:
+            st.error("**Red Flags:** " + "; ".join(sec.red_flags))
+
+        st.markdown(f"Consistency checks: **{sec.consistency_checks_passed}/{sec.consistency_checks_total}** passed")
+
+    def _render_regulatory_thresholds(self, df: pd.DataFrame):
+        """Render regulatory threshold compliance check."""
+        from compliance_scorer import ComplianceScorer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        cs = ComplianceScorer(self.analyzer)
+        reg = cs.regulatory_ratios(data)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Compliance", f"{reg.compliance_pct:.0f}%")
+        col2.metric("Passed", reg.pass_count)
+        col3.metric("Failed", reg.fail_count)
+
+        if reg.critical_failures:
+            st.error("**Critical Failures:** " + "; ".join(reg.critical_failures))
+
+        st.subheader("Threshold Details")
+        for t in reg.thresholds_checked:
+            icon = "pass" if t.passes else "fail"
+            val_str = f"{t.current_value:.4f}" if t.current_value is not None else "N/A"
+            status = "PASS" if t.passes else "FAIL"
+            st.markdown(f"- **{t.rule_name}** ({t.framework}): {val_str} vs {t.threshold_value} -- {status}")
+
+    def _render_audit_risk(self, df: pd.DataFrame):
+        """Render audit risk assessment."""
+        from compliance_scorer import ComplianceScorer
+
+        data = self.analyzer._dataframe_to_financial_data(df)
+        cs = ComplianceScorer(self.analyzer)
+        report = cs.full_compliance_report(data)
+        audit = report.audit_risk
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Audit Risk", audit.risk_level.title())
+        col2.metric("Score", f"{audit.score}/100")
+        col3.metric("Grade", audit.grade)
+
+        if audit.going_concern_risk:
+            st.error("**GOING CONCERN RISK IDENTIFIED**")
+        if audit.restatement_risk_indicators:
+            st.warning("**Restatement Risk Indicators:**")
+            for ind in audit.restatement_risk_indicators:
+                st.markdown(f"- {ind}")
+        if audit.recommendations:
+            st.subheader("Recommendations")
+            for rec in audit.recommendations:
+                st.markdown(f"- {rec}")
 
     @staticmethod
     @st.cache_data(ttl=3600)

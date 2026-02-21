@@ -20,6 +20,9 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT assessment_id IF NOT EXISTS FOR (a:CreditAssessment) REQUIRE a.assessment_id IS UNIQUE",
     "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (p:CovenantPackage) REQUIRE p.package_id IS UNIQUE",
     "CREATE CONSTRAINT company_name IF NOT EXISTS FOR (c:Company) REQUIRE c.name IS UNIQUE",
+    "CREATE CONSTRAINT portfolio_id IF NOT EXISTS FOR (p:Portfolio) REQUIRE p.portfolio_id IS UNIQUE",
+    "CREATE CONSTRAINT portfolio_risk_id IF NOT EXISTS FOR (r:PortfolioRisk) REQUIRE r.risk_id IS UNIQUE",
+    "CREATE CONSTRAINT compliance_id IF NOT EXISTS FOR (c:ComplianceReport) REQUIRE c.compliance_id IS UNIQUE",
 ]
 
 
@@ -371,4 +374,76 @@ UNWIND $period_labels AS lbl
 MATCH (p:FiscalPeriod {label: lbl})-[:HAS_RATIO]->(r:FinancialRatio)
 RETURN p.label AS period, r.name AS ratio_name, r.value AS value, r.category AS category
 ORDER BY r.name, p.label
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 7: Portfolio and compliance graph nodes
+# ---------------------------------------------------------------------------
+#
+# (:Portfolio {portfolio_id, name, created_at})
+#   -[:CONTAINS_COMPANY]-> (:Company)
+#   -[:HAS_PORTFOLIO_RISK]-> (:PortfolioRisk {risk_id, avg_health, min_health,
+#                                              max_health, risk_level, distress_count,
+#                                              diversification_score, risk_flags})
+#
+# (:Company)
+#   -[:HAS_COMPLIANCE_REPORT]-> (:ComplianceReport {compliance_id, sox_risk,
+#                                                    sox_score, sec_score,
+#                                                    regulatory_pct, audit_risk,
+#                                                    audit_score, going_concern})
+#
+
+MERGE_PORTFOLIO = """
+MERGE (p:Portfolio {portfolio_id: $portfolio_id})
+SET p.name = $name, p.created_at = datetime()
+RETURN p
+"""
+
+MERGE_PORTFOLIO_MEMBERSHIP_BATCH = """
+UNWIND $company_names AS cname
+MERGE (c:Company {name: cname})
+WITH c
+MATCH (p:Portfolio {portfolio_id: $portfolio_id})
+MERGE (p)-[:CONTAINS_COMPANY]->(c)
+RETURN count(c) AS linked
+"""
+
+MERGE_PORTFOLIO_RISK = """
+MERGE (r:PortfolioRisk {risk_id: $risk_id})
+SET r.avg_health = $avg_health,
+    r.min_health = $min_health,
+    r.max_health = $max_health,
+    r.risk_level = $risk_level,
+    r.distress_count = $distress_count,
+    r.diversification_score = $diversification_score,
+    r.risk_flags = $risk_flags
+WITH r
+MATCH (p:Portfolio {portfolio_id: $portfolio_id})
+MERGE (p)-[:HAS_PORTFOLIO_RISK]->(r)
+RETURN r
+"""
+
+MERGE_COMPLIANCE_REPORT_BATCH = """
+UNWIND $batch AS row
+MERGE (cr:ComplianceReport {compliance_id: row.compliance_id})
+SET cr.sox_risk = row.sox_risk,
+    cr.sox_score = row.sox_score,
+    cr.sec_score = row.sec_score,
+    cr.regulatory_pct = row.regulatory_pct,
+    cr.audit_risk = row.audit_risk,
+    cr.audit_score = row.audit_score,
+    cr.going_concern = row.going_concern
+WITH cr, row
+MATCH (c:Company {name: row.company_name})
+MERGE (c)-[:HAS_COMPLIANCE_REPORT]->(cr)
+RETURN count(cr) AS stored
+"""
+
+COMPLIANCE_BY_COMPANY = """
+MATCH (c:Company {name: $company_name})-[:HAS_COMPLIANCE_REPORT]->(cr:ComplianceReport)
+RETURN cr.compliance_id AS compliance_id, cr.sox_risk AS sox_risk,
+       cr.sox_score AS sox_score, cr.sec_score AS sec_score,
+       cr.regulatory_pct AS regulatory_pct, cr.audit_risk AS audit_risk,
+       cr.audit_score AS audit_score, cr.going_concern AS going_concern
+ORDER BY cr.audit_score DESC
 """
