@@ -959,10 +959,16 @@ class TestOllamaHostValidation:
             assert "http://localhost:11434" in embedder._url
 
     def test_https_scheme_accepted(self):
-        """HTTPS should work."""
-        with patch.dict("os.environ", {"OLLAMA_HOST": "https://secure.host:443"}):
+        """HTTPS should work with allowed hostname."""
+        with patch.dict("os.environ", {"OLLAMA_HOST": "https://localhost:443"}):
             embedder = LocalEmbedder("test-model")
-            assert "https://secure.host:443" in embedder._url
+            assert "https://localhost:443" in embedder._url
+
+    def test_disallowed_hostname_rejected(self):
+        """Hostnames outside allow-list should raise ValueError."""
+        with patch.dict("os.environ", {"OLLAMA_HOST": "http://evil.attacker.com:11434"}):
+            with pytest.raises(ValueError, match="not in allow-list"):
+                LocalEmbedder("test-model")
 
 
 if __name__ == "__main__":

@@ -247,7 +247,7 @@ async def analyze(req: AnalyzeRequest):
             "generated_at": report.generated_at,
         }
     except Exception as exc:
-        logger.warning("Analyze request failed: %s", exc, exc_info=True)
+        logger.warning("Analyze request failed: %s", type(exc).__name__)
         raise HTTPException(
             status_code=422,
             detail="Could not process the provided financial data.",

@@ -75,10 +75,10 @@ def check_neo4j_connection() -> Dict[str, str]:
         store = Neo4jStore.connect()
         if store:
             store.close()
-            return {"status": "ok", "detail": f"Neo4j reachable at {uri}"}
-        return {"status": "warning", "detail": f"Neo4j configured but connection failed: {uri}"}
-    except Exception as e:
-        return {"status": "warning", "detail": f"Neo4j check error: {e}"}
+            return {"status": "ok", "detail": "Neo4j reachable"}
+        return {"status": "warning", "detail": "Neo4j configured but connection failed"}
+    except Exception:
+        return {"status": "warning", "detail": "Neo4j check error"}
 
 
 def check_cache_folders() -> Dict[str, str]:

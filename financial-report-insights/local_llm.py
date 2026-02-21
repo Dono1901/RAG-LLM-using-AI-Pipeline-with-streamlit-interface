@@ -377,12 +377,24 @@ class LocalEmbedder:
 
         self.model_name = model_name
         host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        # Validate URL scheme to prevent SSRF via malicious OLLAMA_HOST
+        # Validate URL scheme and hostname to prevent SSRF
         from urllib.parse import urlparse
         parsed = urlparse(host)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(
                 f"OLLAMA_HOST must use http or https scheme, got: {parsed.scheme!r}"
+            )
+        _ALLOWED_HOSTS = {
+            "localhost", "127.0.0.1", "::1",
+            "model-runner.docker.internal",
+            "host.docker.internal",
+            "ollama",  # Docker service name
+        }
+        hostname = (parsed.hostname or "").lower()
+        if hostname not in _ALLOWED_HOSTS:
+            raise ValueError(
+                f"OLLAMA_HOST hostname {hostname!r} not in allow-list. "
+                f"Allowed: {sorted(_ALLOWED_HOSTS)}"
             )
         self._url = f"{host.rstrip('/')}/v1/embeddings"
         self._client = httpx.Client(timeout=60.0)

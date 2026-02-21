@@ -7,8 +7,19 @@ Controlled via LOG_LEVEL and LOG_FORMAT environment variables.
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
+
+_SECRETS_RE = re.compile(
+    r"(password|secret|token|api[_-]?key|credential)[=:]\s*\S+",
+    re.IGNORECASE,
+)
+
+
+def _redact(text: str) -> str:
+    """Replace password/token/key values with ***REDACTED***."""
+    return _SECRETS_RE.sub(r"\1=***REDACTED***", text)
 
 
 class JSONFormatter(logging.Formatter):
@@ -19,7 +30,7 @@ class JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": _redact(record.getMessage()),
             "module": record.module,
             "function": record.funcName,
             "line": record.lineno,
@@ -27,7 +38,7 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info and record.exc_info[1]:
             log_entry["exception"] = {
                 "type": type(record.exc_info[1]).__name__,
-                "message": str(record.exc_info[1]),
+                "message": _redact(str(record.exc_info[1])),
             }
         return json.dumps(log_entry, default=str)
 
