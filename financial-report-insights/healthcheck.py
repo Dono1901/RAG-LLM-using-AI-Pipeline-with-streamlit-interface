@@ -90,7 +90,7 @@ def check_cache_folders() -> Dict[str, str]:
         path = Path(d)
         try:
             path.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             issues.append(f"{d}: {e}")
 
     if issues:
