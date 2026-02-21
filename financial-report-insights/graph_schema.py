@@ -30,8 +30,13 @@ def vector_index_statement(embedding_dim: int, model_name: str) -> str:
     """Return the Cypher to create a vector index on Chunk nodes.
 
     Index name encodes the model so that switching models doesn't collide.
+    Input sanitization ensures no Cypher injection via model_name.
     """
-    safe_model = model_name.replace("-", "_").replace("/", "_")
+    import re
+
+    embedding_dim = int(embedding_dim)  # enforce integer
+    # Strip to alphanumeric + underscore only (defense-in-depth)
+    safe_model = re.sub(r"[^a-zA-Z0-9_]", "_", model_name)
     index_name = f"chunk_embedding_{safe_model}"
     return (
         f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "

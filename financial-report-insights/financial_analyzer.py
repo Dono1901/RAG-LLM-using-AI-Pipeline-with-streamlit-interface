@@ -3166,7 +3166,12 @@ class CharlieAnalyzer:
         sections: Dict[str, str] = {}
 
         results = self.analyze(data)
-        health = self.composite_health_score(data, prior_data)
+        # Reuse health score from analyze() when no prior_data; recompute only
+        # when prior_data is supplied (adds period-comparison delta).
+        if prior_data is not None:
+            health = self.composite_health_score(data, prior_data)
+        else:
+            health = results['composite_health']
 
         # --- Executive Summary ---
         lines = [f"Overall Financial Health: {health.grade} ({health.score}/100)"]

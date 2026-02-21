@@ -25,6 +25,18 @@ class TestGraphSchema:
         assert "org_model_name" in stmt
         assert "/" not in stmt.split("IF NOT EXISTS")[0]
 
+    def test_vector_index_statement_rejects_injection_chars(self):
+        from graph_schema import vector_index_statement
+        malicious = "model`; DROP INDEX foo; //"
+        stmt = vector_index_statement(512, malicious)
+        # Cypher control chars stripped from index name portion
+        idx_part = stmt.split("IF NOT EXISTS")[0]
+        assert "`" not in idx_part
+        assert ";" not in stmt.split("OPTIONS")[0]
+        assert "//" not in idx_part
+        # Dimension still correct
+        assert "512" in stmt
+
     def test_constraints_are_idempotent(self):
         from graph_schema import CONSTRAINTS
         for c in CONSTRAINTS:
