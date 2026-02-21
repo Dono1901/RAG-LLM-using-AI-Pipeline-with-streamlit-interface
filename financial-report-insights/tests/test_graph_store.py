@@ -399,3 +399,174 @@ class TestSemanticSearchCallsGraphSearch:
         # Should have fallen through to numpy path
         assert len(results) == 1
         assert results[0]["source"] == "a.pdf"
+
+
+# ---------------------------------------------------------------------------
+# store_portfolio_analysis tests (CRITICAL gap)
+# ---------------------------------------------------------------------------
+
+
+class TestStorePortfolioAnalysis:
+    def _make_risk_summary(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            avg_health_score=65.0,
+            min_health_score=40,
+            max_health_score=90,
+            overall_risk_level="moderate",
+            distress_count=1,
+            risk_flags=["Company X in distress"],
+        )
+
+    def test_returns_portfolio_id(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        result = store.store_portfolio_analysis(
+            "TestPortfolio", ["A", "B"], self._make_risk_summary(), 70,
+        )
+        assert isinstance(result, str)
+        assert len(result) == 64  # SHA-256 hex digest
+
+    def test_makes_three_run_calls(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        store.store_portfolio_analysis("P", ["A"], self._make_risk_summary())
+        assert mock_session.run.call_count == 3
+
+    def test_returns_none_on_failure(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("connection lost")
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        result = store.store_portfolio_analysis("P", ["A"], self._make_risk_summary())
+        assert result is None
+
+    def test_id_is_deterministic(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        risk = self._make_risk_summary()
+        id1 = store.store_portfolio_analysis("P", ["A", "B"], risk)
+        id2 = store.store_portfolio_analysis("P", ["B", "A"], risk)
+        # Sorted company names -> same id regardless of input order
+        assert id1 == id2
+
+    def test_empty_company_names(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        result = store.store_portfolio_analysis("P", [], self._make_risk_summary())
+        assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# store_compliance_report tests (CRITICAL gap)
+# ---------------------------------------------------------------------------
+
+
+class TestStoreComplianceReport:
+    def _make_compliance_report(self):
+        from types import SimpleNamespace
+        sox = SimpleNamespace(overall_risk="low", risk_score=85)
+        sec = SimpleNamespace(disclosure_score=75)
+        reg = SimpleNamespace(compliance_pct=83.3)
+        audit = SimpleNamespace(risk_level="low", score=80, going_concern_risk=False)
+        return SimpleNamespace(sox=sox, sec=sec, regulatory=reg, audit_risk=audit)
+
+    def test_returns_compliance_id(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        result = store.store_compliance_report("TestCo", self._make_compliance_report())
+        assert isinstance(result, str)
+        assert len(result) == 64
+
+    def test_makes_two_run_calls(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        store.store_compliance_report("TestCo", self._make_compliance_report())
+        assert mock_session.run.call_count == 2
+
+    def test_returns_none_on_failure(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("connection lost")
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        result = store.store_compliance_report("TestCo", self._make_compliance_report())
+        assert result is None
+
+    def test_none_sub_components(self):
+        """When sox/sec/regulatory/audit_risk are None, fallbacks work."""
+        from types import SimpleNamespace
+        from graph_store import Neo4jStore
+
+        mock_driver = MagicMock()
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+
+        report = SimpleNamespace(sox=None, sec=None, regulatory=None, audit_risk=None)
+        result = store.store_compliance_report("TestCo", report)
+        assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Read method error paths (CRITICAL gap)
+# ---------------------------------------------------------------------------
+
+
+class TestGraphStoreReadErrorPaths:
+    def _make_store_with_failing_session(self):
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_session.run.side_effect = Exception("read failed")
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+        store = Neo4jStore.__new__(Neo4jStore)
+        store._driver = mock_driver
+        return store
+
+    def test_ratios_by_period_label_returns_empty_on_failure(self):
+        store = self._make_store_with_failing_session()
+        result = store.ratios_by_period_label("Q1-2024")
+        assert result == []
+
+    def test_scores_by_period_label_returns_empty_on_failure(self):
+        store = self._make_store_with_failing_session()
+        result = store.scores_by_period_label("Q1-2024")
+        assert result == []
+
+    def test_cross_period_ratio_trend_returns_empty_on_failure(self):
+        store = self._make_store_with_failing_session()
+        result = store.cross_period_ratio_trend(["Q1", "Q2"])
+        assert result == []
+
+    def test_cross_period_ratio_trend_empty_period_list(self):
+        store = self._make_store_with_failing_session()
+        result = store.cross_period_ratio_trend([])
+        assert result == []
