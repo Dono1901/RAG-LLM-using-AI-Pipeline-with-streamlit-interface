@@ -113,6 +113,34 @@ class TestSOXCompliance:
         loss_flags = [f for f in sox.flags if "Operating loss" in f]
         assert len(loss_flags) > 0
 
+    def test_negative_ni_ocf_ratio_flagged(self, scorer):
+        """BUG-2 fix: negative NI with negative OCF should still flag concern,
+        even though OCF/NI ratio > 0.5 (both negative → positive ratio)."""
+        data = FinancialData(
+            revenue=1_000_000,
+            net_income=-200_000,
+            operating_cash_flow=-150_000,
+            total_assets=2_000_000,
+            total_equity=500_000,
+        )
+        sox = scorer.sox_compliance(data)
+        # Should flag negative NI as earnings quality concern
+        ni_flags = [f for f in sox.flags if "Negative net income" in f]
+        assert len(ni_flags) > 0
+
+    def test_positive_ni_low_ocf_flagged(self, scorer):
+        """Positive NI with low OCF/NI should still flag divergence."""
+        data = FinancialData(
+            revenue=1_000_000,
+            net_income=200_000,
+            operating_cash_flow=50_000,  # OCF/NI = 0.25
+            total_assets=2_000_000,
+            total_equity=500_000,
+        )
+        sox = scorer.sox_compliance(data)
+        ocf_flags = [f for f in sox.flags if "OCF/NI" in f]
+        assert len(ocf_flags) > 0
+
 
 # ---------------------------------------------------------------------------
 # SEC Filing Quality

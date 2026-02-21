@@ -232,7 +232,19 @@ class ComplianceScorer:
         checks_done += 1
         ocf_ni = safe_divide(data.operating_cash_flow, data.net_income)
         if ocf_ni is not None:
-            if ocf_ni < 0.5:
+            # When NI is negative, a positive ratio means OCF is also negative
+            # (both negative -> positive ratio), which is not a sign of quality
+            ni_negative = data.net_income is not None and data.net_income < 0
+            if ni_negative:
+                # Negative NI: flag as concern regardless of OCF/NI ratio
+                flags.append(
+                    f"Negative net income (${data.net_income:,.0f}) -- "
+                    "earnings quality indeterminate"
+                )
+                significant_deficiency.append(
+                    "Net income is negative; OCF/NI ratio is unreliable"
+                )
+            elif ocf_ni < 0.5:
                 flags.append(
                     f"OCF/NI ratio is {ocf_ni:.2f} (below 0.50) -- "
                     "earnings quality concern"

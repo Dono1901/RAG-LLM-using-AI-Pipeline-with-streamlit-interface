@@ -577,18 +577,12 @@ def run_all_ratios(data: FinancialData) -> Dict[str, RatioResult]:
     results: Dict[str, RatioResult] = {}
     computed_values: Dict[str, Optional[float]] = {}
 
-    # First pass: compute all ratio values
+    # Single pass: adjustments reference FinancialData fields (not other catalog
+    # ratios), so one iteration with the shared computed_values dict is sufficient.
     for ratio_key, definition in RATIO_CATALOG.items():
         result = compute_ratio(data, definition, computed_values)
         results[ratio_key] = result
         computed_values[ratio_key] = result.value
-
-    # Second pass: recompute with full adjustment context
-    # (Optional optimization if adjustments reference other catalog ratios)
-    for ratio_key, definition in RATIO_CATALOG.items():
-        if definition.adjustments:
-            result = compute_ratio(data, definition, computed_values)
-            results[ratio_key] = result
 
     return results
 
