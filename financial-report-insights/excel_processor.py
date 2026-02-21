@@ -191,7 +191,13 @@ class ExcelProcessor:
 
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
-            data = list(ws.values)
+            # Stream rows instead of list() to avoid OOM on huge sheets
+            data = []
+            row_limit = settings.max_workbook_rows + 10  # header search margin
+            for row in ws.values:
+                data.append(row)
+                if len(data) >= row_limit:
+                    break
 
             if not data:
                 continue

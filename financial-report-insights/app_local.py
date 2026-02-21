@@ -249,7 +249,12 @@ class SimpleRAG:
         Uses SHA-256 of file content instead of mtime, so unchanged files
         won't be re-embedded even after a touch/copy operation.
         """
-        content_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        # Stream-hash to avoid loading entire file into memory
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65_536), b""):
+                h.update(chunk)
+        content_hash = h.hexdigest()
         key_str = f"{file_path.name}:{content_hash}:{self._embedding_model_name}"
         return hashlib.sha256(key_str.encode()).hexdigest()
 
