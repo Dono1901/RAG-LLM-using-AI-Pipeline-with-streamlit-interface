@@ -7680,7 +7680,8 @@ class FinancialInsightsPage:
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Net Burn", f"${br.net_burn:,.0f}/mo" if br.net_burn else "N/A")
-        col2.metric("Runway", f"{br.runway_months:.0f} months" if br.runway_months else "N/A")
+        runway_label = "Infinite" if br.is_cash_flow_positive else (f"{br.runway_months:.0f} months" if br.runway_months else "N/A")
+        col2.metric("Runway", runway_label)
         col3.metric("Category", br.category.title() if br.category else "N/A")
 
         if br.cash_on_hand:

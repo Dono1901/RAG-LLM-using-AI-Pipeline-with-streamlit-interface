@@ -113,6 +113,7 @@ class SimpleRAG:
         self._excel_processor = None
         self._charlie_analyzer = None
         self._financial_analysis_cache = None
+        self._financial_analysis_lock = threading.Lock()
 
         # Per-period FinancialData cache for multi-document comparison
         self._period_financial_data: Dict[str, Any] = {}
@@ -159,85 +160,97 @@ class SimpleRAG:
         Returns:
             Formatted analysis text, or empty string if unavailable.
         """
-        if self._financial_analysis_cache is not None:
-            return self._financial_analysis_cache
+        # Fast path: already computed (no lock needed for immutable str read)
+        cached = self._financial_analysis_cache
+        if cached is not None:
+            return cached
 
-        if not self.charlie_analyzer or not self.excel_processor:
-            self._financial_analysis_cache = ""
-            return ""
+        lock = getattr(self, "_financial_analysis_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._financial_analysis_lock = lock
 
-        try:
-            excel_files = self.excel_processor.scan_for_excel_files()
-            if not excel_files:
+        with lock:
+            # Double-check after acquiring lock
+            if self._financial_analysis_cache is not None:
+                return self._financial_analysis_cache
+
+            if not self.charlie_analyzer or not self.excel_processor:
                 self._financial_analysis_cache = ""
                 return ""
 
-            analysis_parts = []
+            try:
+                excel_files = self.excel_processor.scan_for_excel_files()
+                if not excel_files:
+                    self._financial_analysis_cache = ""
+                    return ""
 
-            for file_path in excel_files[:3]:
-                try:
-                    workbook = self.excel_processor.load_workbook(file_path)
-                    combined = self.excel_processor.combine_sheets_intelligently(workbook)
+                analysis_parts = []
 
-                    # Try merged DataFrame first, then individual sheets
-                    dfs_to_analyze = []
-                    if combined.merged_df is not None and not combined.merged_df.empty:
-                        dfs_to_analyze.append((file_path.name, combined.merged_df))
-                    else:
-                        for sheet in workbook.sheets[:3]:
-                            if not sheet.df.empty:
-                                dfs_to_analyze.append(
-                                    (f"{file_path.name}/{sheet.name}", sheet.df)
-                                )
+                for file_path in excel_files[:3]:
+                    try:
+                        workbook = self.excel_processor.load_workbook(file_path)
+                        combined = self.excel_processor.combine_sheets_intelligently(workbook)
 
-                    for source_name, df in dfs_to_analyze:
-                        financial_data = self.charlie_analyzer._dataframe_to_financial_data(df)
+                        # Try merged DataFrame first, then individual sheets
+                        dfs_to_analyze = []
+                        if combined.merged_df is not None and not combined.merged_df.empty:
+                            dfs_to_analyze.append((file_path.name, combined.merged_df))
+                        else:
+                            for sheet in workbook.sheets[:3]:
+                                if not sheet.df.empty:
+                                    dfs_to_analyze.append(
+                                        (f"{file_path.name}/{sheet.name}", sheet.df)
+                                    )
 
-                        # Only analyze if we have meaningful data
-                        if financial_data.revenue is None and financial_data.total_assets is None:
-                            continue
+                        for source_name, df in dfs_to_analyze:
+                            financial_data = self.charlie_analyzer._dataframe_to_financial_data(df)
 
-                        # Cache for multi-document comparison
-                        if hasattr(self, "_period_financial_data"):
-                            self._period_financial_data[source_name] = financial_data
+                            # Only analyze if we have meaningful data
+                            if financial_data.revenue is None and financial_data.total_assets is None:
+                                continue
 
-                        report = self.charlie_analyzer.generate_report(financial_data)
+                            # Cache for multi-document comparison
+                            if hasattr(self, "_period_financial_data"):
+                                self._period_financial_data[source_name] = financial_data
 
-                        # Persist to graph if available (structured path preferred)
-                        if getattr(self, "_graph_store", None):
-                            try:
-                                from graph_retriever import persist_structured_analysis_to_graph
-                                from ratio_framework import run_all_ratios
-                                ratio_results = run_all_ratios(financial_data)
-                                persist_structured_analysis_to_graph(
-                                    self._graph_store,
-                                    source_name,
-                                    source_name,
-                                    financial_data=financial_data,
-                                    ratio_results=ratio_results,
-                                )
-                            except Exception as exc:
-                                logger.debug("Graph persist failed: %s", exc)
+                            report = self.charlie_analyzer.generate_report(financial_data)
 
-                        analysis_parts.append(
-                            f"=== Computed Analysis: {source_name} ===\n"
-                            f"{report.executive_summary}\n\n"
-                            f"Key Ratios:\n{report.sections.get('ratio_analysis', 'N/A')}\n\n"
-                            f"Scoring Models:\n{report.sections.get('scoring_models', 'N/A')}\n\n"
-                            f"Risk Assessment:\n{report.sections.get('risk_assessment', 'N/A')}"
-                        )
-                        break  # One analysis per file
+                            # Persist to graph if available (structured path preferred)
+                            if getattr(self, "_graph_store", None):
+                                try:
+                                    from graph_retriever import persist_structured_analysis_to_graph
+                                    from ratio_framework import run_all_ratios
+                                    ratio_results = run_all_ratios(financial_data)
+                                    persist_structured_analysis_to_graph(
+                                        self._graph_store,
+                                        source_name,
+                                        source_name,
+                                        financial_data=financial_data,
+                                        ratio_results=ratio_results,
+                                    )
+                                except Exception as exc:
+                                    logger.debug("Graph persist failed: %s", exc)
 
-                except Exception as e:
-                    logger.debug(f"Could not analyze {file_path.name}: {e}")
+                            analysis_parts.append(
+                                f"=== Computed Analysis: {source_name} ===\n"
+                                f"{report.executive_summary}\n\n"
+                                f"Key Ratios:\n{report.sections.get('ratio_analysis', 'N/A')}\n\n"
+                                f"Scoring Models:\n{report.sections.get('scoring_models', 'N/A')}\n\n"
+                                f"Risk Assessment:\n{report.sections.get('risk_assessment', 'N/A')}"
+                            )
+                            break  # One analysis per file
 
-            self._financial_analysis_cache = "\n\n".join(analysis_parts) if analysis_parts else ""
+                    except Exception as e:
+                        logger.debug(f"Could not analyze {file_path.name}: {e}")
 
-        except Exception as e:
-            logger.debug(f"Financial analysis context generation failed: {e}")
-            self._financial_analysis_cache = ""
+                self._financial_analysis_cache = "\n\n".join(analysis_parts) if analysis_parts else ""
 
-        return self._financial_analysis_cache
+            except Exception as e:
+                logger.debug(f"Financial analysis context generation failed: {e}")
+                self._financial_analysis_cache = ""
+
+            return self._financial_analysis_cache
 
     # ------------------------------------------------------------------
     # Embedding cache helpers

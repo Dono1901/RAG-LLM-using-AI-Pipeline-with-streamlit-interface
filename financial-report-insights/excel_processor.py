@@ -338,6 +338,10 @@ class ExcelProcessor:
             if non_empty >= 2 and text_count >= non_empty * 0.5:
                 return i
 
+        logger.warning(
+            "No clear header row found in first 10 rows; "
+            "defaulting to row 0 (first data row may be misinterpreted as headers)."
+        )
         return 0  # Default to first row
 
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -535,7 +539,10 @@ class ExcelProcessor:
         )
 
     def _can_merge_sheets(self, sheets: List[SheetData]) -> bool:
-        """Check if sheets have similar enough schemas to merge."""
+        """Check if sheets have similar enough schemas to merge.
+
+        Requires >=70% column name overlap AND matching dtypes on shared columns.
+        """
         if len(sheets) < 2:
             return False
 
@@ -546,8 +553,22 @@ class ExcelProcessor:
             max_cols = max(len(base_columns), len(sheet_columns))
             if max_cols == 0:
                 return False
-            overlap = len(base_columns & sheet_columns) / max_cols
+            shared = base_columns & sheet_columns
+            overlap = len(shared) / max_cols
             if overlap < 0.7:
+                return False
+            # Check dtype compatibility on shared columns
+            type_mismatches = 0
+            for col in shared:
+                base_kind = sheets[0].df[col].dtype.kind  # 'f'=float, 'O'=object, etc.
+                other_kind = sheet.df[col].dtype.kind
+                if base_kind != other_kind:
+                    type_mismatches += 1
+            if shared and type_mismatches / len(shared) > 0.3:
+                logger.warning(
+                    "Sheet '%s' has >30%% dtype mismatches with base sheet on shared columns; skipping merge.",
+                    sheet.name,
+                )
                 return False
 
         return True

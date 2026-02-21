@@ -119,7 +119,8 @@ def _hhi(values: List[float]) -> float:
         HHI in [0, 1] where 1 = fully concentrated and 1/n = perfectly even.
         Returns 1.0 if only one entry or all zeros.
     """
-    filtered = [v for v in values if v is not None and v > 0]
+    # Use absolute values so negative-revenue companies are not silently excluded
+    filtered = [abs(v) for v in values if v is not None and v != 0]
     if len(filtered) <= 1:
         return 1.0
     total = sum(filtered)
@@ -236,6 +237,12 @@ class PortfolioAnalyzer:
         else:
             avg_corr = 0.0
 
+        # Warn about companies with no computable ratios (all-zero vectors)
+        zero_companies = [
+            names[i] for i in range(n)
+            if np.allclose(ratio_matrix[i], 0.0)
+        ]
+
         # Replace NaN with 0.0 only for the output matrix (display purposes)
         corr = np.nan_to_num(corr, nan=0.0)
         matrix_list = corr.tolist()
@@ -254,6 +261,12 @@ class PortfolioAnalyzer:
             interp = (
                 f"Low correlation ({avg_corr:.2f}): strong diversification effect -- "
                 "companies have distinct financial profiles."
+            )
+
+        if zero_companies:
+            interp += (
+                f" NOTE: {', '.join(zero_companies)} had no computable ratios "
+                "and were excluded from correlation calculation."
             )
 
         return CorrelationMatrix(

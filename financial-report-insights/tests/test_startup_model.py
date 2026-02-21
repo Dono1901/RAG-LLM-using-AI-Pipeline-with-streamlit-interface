@@ -234,7 +234,8 @@ class TestBurnRunway:
         br = analyzer.burn_runway(data)
         assert br.net_burn is not None
         assert br.net_burn <= 0
-        assert br.runway_months == 999.0
+        assert br.runway_months is None
+        assert br.is_cash_flow_positive is True
         assert br.category == "strong"
 
     def test_burn_runway_no_data(self, analyzer):

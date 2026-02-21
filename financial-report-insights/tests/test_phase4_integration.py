@@ -89,8 +89,10 @@ def _make_mock_rag(charlie_analyzer=None, excel_processor=None, cache=None):
     from app_local import SimpleRAG
 
     # Use __new__ to bypass __init__
+    import threading
     rag = SimpleRAG.__new__(SimpleRAG)
     rag._financial_analysis_cache = cache
+    rag._financial_analysis_lock = threading.Lock()
     rag._charlie_analyzer = charlie_analyzer
     rag._excel_processor = excel_processor
 

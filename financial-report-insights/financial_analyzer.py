@@ -98,6 +98,7 @@ class BudgetAnalysis:
     favorable_items: List[VarianceResult]
     unfavorable_items: List[VarianceResult]
     largest_variances: List[VarianceResult]
+    unmatched_items: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -2552,11 +2553,15 @@ class CharlieAnalyzer:
         forecasted = []
 
         if method == 'linear':
-            # Linear trend extrapolation
-            x = np.arange(len(historical))
-            coeffs = np.polyfit(x, historical, 1)
+            # Linear trend extrapolation (normalize x to avoid conditioning issues)
+            n_hist = len(historical)
+            x = np.arange(n_hist, dtype=float)
+            # Normalize: shift to zero-mean for better polyfit conditioning
+            x_mean = x.mean()
+            x_norm = x - x_mean
+            coeffs = np.polyfit(x_norm, historical, 1)
             for i in range(periods):
-                forecasted.append(coeffs[0] * (len(historical) + i) + coeffs[1])
+                forecasted.append(coeffs[0] * (n_hist + i - x_mean) + coeffs[1])
 
         elif method == 'moving_average':
             # Moving average projection
@@ -2608,10 +2613,22 @@ class CharlieAnalyzer:
         # Merge on item column
         merged = actual_df.merge(budget_df, on=item_column, how='outer', suffixes=('_actual', '_budget'))
 
+        unmatched_items: list = []
         for _, row in merged.iterrows():
             category = row[item_column]
-            actual = row.get(actual_column, row.get(f'{actual_column}_actual', 0)) or 0
-            budget = row.get(budget_column, row.get(f'{budget_column}_budget', 0)) or 0
+            actual = row.get(actual_column, row.get(f'{actual_column}_actual', None))
+            budget = row.get(budget_column, row.get(f'{budget_column}_budget', None))
+
+            # Flag line items present in only one dataset
+            actual_missing = actual is None or (isinstance(actual, float) and np.isnan(actual))
+            budget_missing = budget is None or (isinstance(budget, float) and np.isnan(budget))
+            if actual_missing or budget_missing:
+                side = "budget" if budget_missing else "actual"
+                unmatched_items.append(f"{category} (missing {side})")
+                logger.warning("Budget variance: '%s' missing %s value; treating as 0.", category, side)
+
+            actual = 0 if actual_missing else float(actual)
+            budget = 0 if budget_missing else float(budget)
 
             variance_result = self.calculate_variance(actual, budget, category)
             line_items.append(variance_result)
@@ -2635,7 +2652,8 @@ class CharlieAnalyzer:
             line_items=line_items,
             favorable_items=favorable_items,
             unfavorable_items=unfavorable_items,
-            largest_variances=largest_variances
+            largest_variances=largest_variances,
+            unmatched_items=unmatched_items,
         )
 
     # ===== CASH FLOW ANALYSIS =====
@@ -2747,6 +2765,11 @@ class CharlieAnalyzer:
             if equity_multiplier is not None:
                 parts.append(f"equity multiplier {equity_multiplier:.2f}x")
             interpretation = f"ROE of {roe:.1%} driven by {', '.join(parts)}."
+            if data.total_equity is not None and data.total_equity < 0:
+                interpretation += (
+                    " WARNING: Negative equity makes the DuPont decomposition "
+                    "misleading — equity multiplier is negative."
+                )
 
         return DuPontAnalysis(
             roe=roe,
@@ -2812,9 +2835,20 @@ class CharlieAnalyzer:
                 zone = 'distress'
                 interp = f"Z-Score of {z:.2f} signals financial distress (<1.81). Immediate attention required."
         else:
-            zone = 'partial'
-            interp = (f"Partial Z-Score of {z:.2f} (using {len(available)}/5 components). "
-                      "Interpret with caution.")
+            # Partial data — still flag likely distress when score is very low
+            if z < 1.81:
+                zone = 'partial_distress'
+                interp = (
+                    f"Partial Z-Score of {z:.2f} (using {len(available)}/5 components) "
+                    "suggests possible distress (<1.81). Interpret with caution — "
+                    "missing components may raise or lower the score."
+                )
+            else:
+                zone = 'partial'
+                interp = (
+                    f"Partial Z-Score of {z:.2f} (using {len(available)}/5 components). "
+                    "Interpret with caution."
+                )
 
         return AltmanZScore(
             z_score=z,
@@ -2981,7 +3015,7 @@ class CharlieAnalyzer:
             z_pts = 15
         elif z.zone == 'partial':
             z_pts = 10
-        elif z.zone == 'distress':
+        elif z.zone in ('distress', 'partial_distress'):
             z_pts = 0
         else:
             z_pts = 5
@@ -3770,6 +3804,7 @@ class CharlieAnalyzer:
         data: FinancialData,
         assumptions: Optional[Dict[str, Dict[str, float]]] = None,
         n_simulations: int = 1000,
+        seed: Optional[int] = 42,
     ) -> MonteCarloResult:
         """Run Monte Carlo simulation to model uncertainty in financial outcomes.
 
@@ -3781,6 +3816,7 @@ class CharlieAnalyzer:
                          base value with std of 10% of base.
                          Defaults to revenue/cogs/operating_expenses at 10% std.
             n_simulations: Number of random scenarios to run (default 1000).
+            seed: Random seed for reproducibility. Pass None for non-deterministic runs.
 
         Returns:
             MonteCarloResult with distributions and percentiles.
@@ -3800,7 +3836,7 @@ class CharlieAnalyzer:
                 summary="No variables with data to simulate.",
             )
 
-        rng = np.random.default_rng(seed=42)
+        rng = np.random.default_rng(seed=seed)
 
         metrics_collected: Dict[str, List[float]] = {
             'health_score': [],

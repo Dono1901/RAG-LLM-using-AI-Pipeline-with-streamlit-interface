@@ -52,6 +52,7 @@ class BurnRunway:
     gross_burn: Optional[float] = None  # Total monthly spend
     net_burn: Optional[float] = None  # Net monthly cash decrease
     runway_months: Optional[float] = None
+    is_cash_flow_positive: bool = False
     category: str = ""  # critical (<6mo), caution (6-12), comfortable (12-18), strong (18+)
     cash_on_hand: Optional[float] = None
     monthly_revenue: Optional[float] = None
@@ -158,13 +159,20 @@ class StartupAnalyzer:
 
         cac = data.customer_acquisition_cost
 
+        # Derive MRR once: prefer explicit MRR > ARR/12 > revenue/12 (last resort)
+        mrr = data.monthly_recurring_revenue
+        if mrr is None:
+            mrr = safe_divide(data.annual_recurring_revenue, 12)
+        mrr_from_revenue = mrr is None  # track if we fell back to revenue/12
+        if mrr is None:
+            mrr = safe_divide(data.revenue, 12)
+
+        # Monthly ARPU (used for both LTV and payback)
+        arpu = safe_divide(mrr, data.customer_count) if mrr and data.customer_count else None
+
         # LTV: use explicit value, or derive from ARPU / churn
         ltv = data.lifetime_value
         if ltv is None:
-            mrr = data.monthly_recurring_revenue
-            if mrr is None:
-                mrr = safe_divide(data.annual_recurring_revenue, 12)
-            arpu = safe_divide(mrr, data.customer_count) if mrr and data.customer_count else None
             gross_churn = (
                 safe_divide(data.churned_customers, data.customer_count)
                 if data.churned_customers is not None and data.customer_count
@@ -184,12 +192,10 @@ class StartupAnalyzer:
         # LTV / CAC ratio
         ltv_to_cac = safe_divide(ltv, cac)
 
-        # Payback months = CAC / monthly ARPU
+        # Payback months = CAC / monthly ARPU (uses same MRR/ARPU as LTV)
         payback: Optional[float] = None
         if cac is not None:
-            mrr = data.monthly_recurring_revenue or safe_divide(data.revenue, 12)
-            monthly_arpu = safe_divide(mrr, data.customer_count) if mrr and data.customer_count else None
-            payback = safe_divide(cac, monthly_arpu)
+            payback = safe_divide(cac, arpu)
 
         # Magic number requires prior-period data
         magic_number: Optional[float] = None
@@ -235,10 +241,12 @@ class StartupAnalyzer:
         # Determine runway
         runway: Optional[float] = None
         category = ""
+        is_cfp = False
 
         if net_burn is not None and net_burn <= 0:
-            # Cash-flow positive
-            runway = 999.0
+            # Cash-flow positive — runway is effectively infinite
+            is_cfp = True
+            runway = None
             category = "strong"
         elif net_burn is not None and net_burn > 0:
             runway = data.cash_runway_months or safe_divide(data.cash, net_burn)
@@ -256,7 +264,7 @@ class StartupAnalyzer:
         breakeven_needed = gross_burn  # revenue must match burn
 
         # Interpretation
-        if category == "strong" and net_burn is not None and net_burn <= 0:
+        if is_cfp:
             interp = "Company is cash-flow positive. No burn concerns."
         elif category == "critical":
             interp = f"Critical: ~{runway:.0f} months of runway. Immediate fundraising or cost reduction needed."
@@ -273,6 +281,7 @@ class StartupAnalyzer:
             gross_burn=gross_burn,
             net_burn=net_burn,
             runway_months=runway,
+            is_cash_flow_positive=is_cfp,
             category=category,
             cash_on_hand=data.cash,
             monthly_revenue=monthly_revenue,
@@ -371,11 +380,10 @@ class StartupAnalyzer:
             summary_parts.append(f"MRR: ${saas.mrr:,.0f}.")
         if unit_econ.ltv_to_cac is not None:
             summary_parts.append(f"LTV/CAC: {unit_econ.ltv_to_cac:.1f}x.")
-        if burn.runway_months is not None:
-            if burn.runway_months >= 999:
-                summary_parts.append("Cash-flow positive.")
-            else:
-                summary_parts.append(f"Runway: {burn.runway_months:.0f} months ({burn.category}).")
+        if burn.is_cash_flow_positive:
+            summary_parts.append("Cash-flow positive.")
+        elif burn.runway_months is not None:
+            summary_parts.append(f"Runway: {burn.runway_months:.0f} months ({burn.category}).")
         if funding:
             summary_parts.append(f"{len(funding)} funding scenario(s) evaluated.")
         summary = " ".join(summary_parts)

@@ -408,8 +408,9 @@ class TestPortfolioRiskBoundary:
 class TestHHIEdgeCases:
     """Coverage gap: _hhi with negative, None, and equal values."""
 
-    def test_hhi_negative_values_filtered(self):
-        assert _hhi([100, -50, 200]) == _hhi([100, 200])
+    def test_hhi_negative_values_use_abs(self):
+        # Negative revenue is included via abs(): [100, 50, 200] -> shares sum=350
+        assert _hhi([100, -50, 200]) == _hhi([100, 50, 200])
 
     def test_hhi_none_values_filtered(self):
         assert _hhi([None, 100, None, 200]) == _hhi([100, 200])
