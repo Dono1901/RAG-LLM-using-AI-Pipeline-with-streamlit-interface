@@ -89,30 +89,42 @@ class ExcelProcessor:
 
     SUPPORTED_EXTENSIONS = {'.xlsx', '.xlsm', '.xls', '.csv', '.tsv'}
 
-    # Financial column patterns for auto-detection
+    # Financial column patterns for auto-detection (pre-compiled for performance)
     REVENUE_PATTERNS = [
-        r'revenue', r'sales', r'income', r'turnover', r'net\s*sales',
-        r'gross\s*sales', r'total\s*revenue', r'top\s*line'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'revenue', r'sales', r'income', r'turnover', r'net\s*sales',
+            r'gross\s*sales', r'total\s*revenue', r'top\s*line',
+        ]
     ]
     EXPENSE_PATTERNS = [
-        r'expense', r'cost', r'cogs', r'opex', r'sg&a', r'operating\s*expense',
-        r'admin', r'selling', r'depreciation', r'amortization'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'expense', r'cost', r'cogs', r'opex', r'sg&a', r'operating\s*expense',
+            r'admin', r'selling', r'depreciation', r'amortization',
+        ]
     ]
     ASSET_PATTERNS = [
-        r'asset', r'cash', r'inventory', r'receivable', r'ppe',
-        r'property', r'equipment', r'investment', r'prepaid'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'asset', r'cash', r'inventory', r'receivable', r'ppe',
+            r'property', r'equipment', r'investment', r'prepaid',
+        ]
     ]
     LIABILITY_PATTERNS = [
-        r'liability', r'payable', r'debt', r'loan', r'accrued',
-        r'deferred', r'obligation', r'mortgage'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'liability', r'payable', r'debt', r'loan', r'accrued',
+            r'deferred', r'obligation', r'mortgage',
+        ]
     ]
     EQUITY_PATTERNS = [
-        r'equity', r'capital', r'retained', r'shareholders',
-        r'common\s*stock', r'treasury', r'accumulated'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'equity', r'capital', r'retained', r'shareholders',
+            r'common\s*stock', r'treasury', r'accumulated',
+        ]
     ]
     DATE_PATTERNS = [
-        r'date', r'period', r'year', r'month', r'quarter', r'fy\d{2,4}',
-        r'q[1-4]', r'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec'
+        re.compile(p, re.IGNORECASE) for p in [
+            r'date', r'period', r'year', r'month', r'quarter', r'fy\d{2,4}',
+            r'q[1-4]', r'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec',
+        ]
     ]
 
     def __init__(self, documents_path: str = "./documents"):
@@ -383,8 +395,7 @@ class ExcelProcessor:
             # Check for date
             is_date = False
             if series.dtype == 'object':
-                date_pattern = re.compile(self.DATE_PATTERNS[0], re.IGNORECASE)
-                if date_pattern.search(str(col)):
+                if self.DATE_PATTERNS[0].search(str(col)):
                     is_date = True
 
             # Check for currency (contains $ or numbers with commas)
@@ -415,23 +426,23 @@ class ExcelProcessor:
         col_lower = col_name.lower()
 
         for pattern in self.REVENUE_PATTERNS:
-            if re.search(pattern, col_lower, re.IGNORECASE):
+            if pattern.search(col_lower):
                 return 'revenue'
 
         for pattern in self.EXPENSE_PATTERNS:
-            if re.search(pattern, col_lower, re.IGNORECASE):
+            if pattern.search(col_lower):
                 return 'expense'
 
         for pattern in self.ASSET_PATTERNS:
-            if re.search(pattern, col_lower, re.IGNORECASE):
+            if pattern.search(col_lower):
                 return 'asset'
 
         for pattern in self.LIABILITY_PATTERNS:
-            if re.search(pattern, col_lower, re.IGNORECASE):
+            if pattern.search(col_lower):
                 return 'liability'
 
         for pattern in self.EQUITY_PATTERNS:
-            if re.search(pattern, col_lower, re.IGNORECASE):
+            if pattern.search(col_lower):
                 return 'equity'
 
         return None

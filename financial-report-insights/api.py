@@ -122,6 +122,18 @@ _rate_log: Dict[str, List[float]] = defaultdict(list)
 
 
 @app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add standard security headers to every response."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.middleware("http")
 async def body_size_limit_middleware(request: Request, call_next):
     """Reject request bodies exceeding the configured size limit."""
     content_length = request.headers.get("content-length")
@@ -501,6 +513,22 @@ class CorrelationResponse(BaseModel):
     interpretation: str
 
 
+def _get_portfolio_analyzer():
+    """Return a module-level singleton PortfolioAnalyzer."""
+    if not hasattr(_get_portfolio_analyzer, "_inst"):
+        from portfolio_analyzer import PortfolioAnalyzer
+        _get_portfolio_analyzer._inst = PortfolioAnalyzer()
+    return _get_portfolio_analyzer._inst
+
+
+def _get_compliance_scorer():
+    """Return a module-level singleton ComplianceScorer."""
+    if not hasattr(_get_compliance_scorer, "_inst"):
+        from compliance_scorer import ComplianceScorer
+        _get_compliance_scorer._inst = ComplianceScorer()
+    return _get_compliance_scorer._inst
+
+
 def _parse_financial_data(raw: Dict[str, Any]) -> "FinancialData":
     """Parse a raw dict into FinancialData, filtering unknown fields."""
     from financial_analyzer import FinancialData
@@ -514,8 +542,6 @@ def _parse_financial_data(raw: Dict[str, Any]) -> "FinancialData":
 @app.post("/portfolio/analyze", response_model=PortfolioResponse)
 async def portfolio_analyze(req: PortfolioRequest):
     """Run full portfolio analysis across multiple companies."""
-    from portfolio_analyzer import PortfolioAnalyzer
-
     try:
         companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
     except Exception as exc:
@@ -525,7 +551,7 @@ async def portfolio_analyze(req: PortfolioRequest):
             detail="Invalid financial data format.",
         ) from exc
 
-    pa = PortfolioAnalyzer()
+    pa = _get_portfolio_analyzer()
     report = await asyncio.to_thread(pa.full_portfolio_analysis, companies)
 
     return PortfolioResponse(
@@ -544,8 +570,6 @@ async def portfolio_analyze(req: PortfolioRequest):
 @app.post("/portfolio/correlation", response_model=CorrelationResponse)
 async def portfolio_correlation(req: PortfolioRequest):
     """Compute correlation matrix across portfolio companies."""
-    from portfolio_analyzer import PortfolioAnalyzer
-
     try:
         companies = {name: _parse_financial_data(raw) for name, raw in req.companies.items()}
     except Exception as exc:
@@ -555,7 +579,7 @@ async def portfolio_correlation(req: PortfolioRequest):
             detail="Invalid financial data format.",
         ) from exc
 
-    pa = PortfolioAnalyzer()
+    pa = _get_portfolio_analyzer()
     corr = await asyncio.to_thread(pa.correlation_matrix, companies)
 
     return CorrelationResponse(
@@ -590,8 +614,6 @@ class ComplianceResponse(BaseModel):
 @app.post("/compliance/analyze", response_model=ComplianceResponse)
 async def compliance_analyze(req: AnalyzeRequest):
     """Run full compliance analysis on financial data."""
-    from compliance_scorer import ComplianceScorer
-
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
@@ -601,7 +623,7 @@ async def compliance_analyze(req: AnalyzeRequest):
             detail="Invalid financial data format.",
         ) from exc
 
-    cs = ComplianceScorer()
+    cs = _get_compliance_scorer()
     report = await asyncio.to_thread(cs.full_compliance_report, data)
 
     return ComplianceResponse(
@@ -623,8 +645,6 @@ async def compliance_analyze(req: AnalyzeRequest):
 @app.post("/compliance/sox")
 async def compliance_sox(req: AnalyzeRequest):
     """Run SOX compliance check only."""
-    from compliance_scorer import ComplianceScorer
-
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
@@ -634,7 +654,7 @@ async def compliance_sox(req: AnalyzeRequest):
             detail="Invalid financial data format.",
         ) from exc
 
-    cs = ComplianceScorer()
+    cs = _get_compliance_scorer()
     sox = await asyncio.to_thread(cs.sox_compliance, data)
     return {
         "overall_risk": sox.overall_risk,
@@ -650,8 +670,6 @@ async def compliance_sox(req: AnalyzeRequest):
 @app.post("/compliance/regulatory")
 async def compliance_regulatory(req: AnalyzeRequest):
     """Run regulatory threshold check only."""
-    from compliance_scorer import ComplianceScorer
-
     try:
         data = _parse_financial_data(req.financial_data)
     except Exception as exc:
@@ -661,7 +679,7 @@ async def compliance_regulatory(req: AnalyzeRequest):
             detail="Invalid financial data format.",
         ) from exc
 
-    cs = ComplianceScorer()
+    cs = _get_compliance_scorer()
     reg = await asyncio.to_thread(cs.regulatory_ratios, data)
     return {
         "pass_count": reg.pass_count,

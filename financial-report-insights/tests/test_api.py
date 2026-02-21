@@ -57,6 +57,17 @@ class TestHealthEndpoint:
         assert resp.status_code == 503
 
 
+class TestSecurityHeaders:
+    def test_security_headers_present(self, client):
+        with patch("api.get_health_status", return_value={"healthy": True, "status": "ok", "checks": []}):
+            resp = client.get("/health")
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["X-Frame-Options"] == "DENY"
+        assert resp.headers["X-XSS-Protection"] == "1; mode=block"
+        assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert resp.headers["Cache-Control"] == "no-store"
+
+
 # ---------------------------------------------------------------------------
 # /query
 # ---------------------------------------------------------------------------
