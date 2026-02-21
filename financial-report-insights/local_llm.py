@@ -202,7 +202,7 @@ class LocalLLM:
         try:
             from config import settings as _cfg
             self._cache_maxsize = _cfg.llm_cache_maxsize
-        except Exception:
+        except (ImportError, AttributeError):
             self._cache_maxsize = 128
         self._timeout = timeout_seconds
         self._max_retries = max_retries
@@ -402,7 +402,7 @@ class LocalEmbedder:
         try:
             from config import settings as _cfg
             cfg_dim = _cfg.embedding_dimension
-        except Exception:
+        except (ImportError, AttributeError):
             cfg_dim = 0
         if cfg_dim > 0:
             self.dimension = cfg_dim

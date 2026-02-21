@@ -377,7 +377,7 @@ class ExcelProcessor:
                 numeric_col = pd.to_numeric(df[col], errors='coerce')
                 if numeric_col.notna().sum() / len(df) > 0.5:
                     df[col] = numeric_col
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         return df

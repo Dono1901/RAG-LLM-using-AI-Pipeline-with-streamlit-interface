@@ -621,8 +621,8 @@ class ComplianceScorer:
                 restatement_indicators.append(
                     f"Altman Z-score {z.z_score:.2f} in distress zone"
                 )
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError):
+            pass  # Z-score unavailable for this data
 
         # Check 3: Critical regulatory failures >= 2
         if len(reg.critical_failures) >= 2:
