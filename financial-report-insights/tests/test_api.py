@@ -468,3 +468,31 @@ class TestGraphInjectionSafety:
         mock_rag._graph_store = mock_store
         resp = client.get("/graph/ratios/FY2024%27%20OR%201%3D1")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Input validation hardening
+# ---------------------------------------------------------------------------
+
+
+class TestInputValidation:
+    """Verify API rejects oversized or malformed inputs."""
+
+    def test_portfolio_too_many_companies_rejected(self, client, mock_rag):
+        """Portfolio endpoint rejects > 50 companies."""
+        companies = {f"Co{i}": {"revenue": 1_000_000} for i in range(51)}
+        resp = client.post("/portfolio/analyze", json={"companies": companies})
+        assert resp.status_code == 422
+
+    def test_portfolio_empty_companies_rejected(self, client, mock_rag):
+        """Portfolio endpoint rejects empty companies dict."""
+        resp = client.post("/portfolio/analyze", json={"companies": {}})
+        assert resp.status_code == 422
+
+    def test_graph_context_overlength_period_label(self, client, mock_rag):
+        """Graph context rejects period labels > 100 chars."""
+        mock_store = MagicMock()
+        mock_rag._graph_store = mock_store
+        long_label = "A" * 101
+        resp = client.get(f"/graph/context/{long_label}")
+        assert resp.status_code == 422

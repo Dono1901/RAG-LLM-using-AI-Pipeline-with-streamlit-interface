@@ -12,7 +12,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -118,6 +118,7 @@ app.add_middleware(
 _RATE_WINDOW = 60  # seconds
 _RATE_LIMIT = 60  # max requests per window
 _rate_log: Dict[str, List[float]] = defaultdict(list)
+_rate_lock = threading.Lock()
 
 
 @app.middleware("http")
@@ -151,16 +152,15 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
     client_ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
-    # Prune expired entries
-    timestamps = _rate_log[client_ip]
-    cutoff = now - _RATE_WINDOW
-    _rate_log[client_ip] = [t for t in timestamps if t > cutoff]
-    if len(_rate_log[client_ip]) >= _RATE_LIMIT:
-        return JSONResponse(
-            status_code=429,
-            content={"detail": "Rate limit exceeded. Try again later."},
-        )
-    _rate_log[client_ip].append(now)
+    with _rate_lock:
+        cutoff = now - _RATE_WINDOW
+        _rate_log[client_ip] = [t for t in _rate_log[client_ip] if t > cutoff]
+        if len(_rate_log[client_ip]) >= _RATE_LIMIT:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Try again later."},
+            )
+        _rate_log[client_ip].append(now)
     return await call_next(request)
 
 
@@ -280,7 +280,7 @@ def _require_graph_store():
 
 
 @app.get("/graph/context/{period_label}", response_model=PeriodContext)
-async def graph_context(period_label: str):
+async def graph_context(period_label: str = Path(..., max_length=100)):
     """Return all ratios and scores for a fiscal period."""
     store = _require_graph_store()
     ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
@@ -289,7 +289,7 @@ async def graph_context(period_label: str):
 
 
 @app.get("/graph/ratios/{period_label}", response_model=List[RatioEntry])
-async def graph_ratios(period_label: str, category: Optional[str] = None):
+async def graph_ratios(period_label: str = Path(..., max_length=100), category: Optional[str] = None):
     """Return ratios for a fiscal period with optional category filter."""
     store = _require_graph_store()
     ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
@@ -503,11 +503,23 @@ async def export_pdf(req: ExportRequest):
 # ---------------------------------------------------------------------------
 
 
+_MAX_PORTFOLIO_COMPANIES = 50
+
+
 class PortfolioRequest(BaseModel):
     companies: Dict[str, Dict[str, Any]] = Field(
         ..., min_length=1,
         description="Map of company_name -> financial_data dict (at least 1)",
     )
+
+    @field_validator("companies")
+    @classmethod
+    def limit_company_count(cls, v):
+        if len(v) > _MAX_PORTFOLIO_COMPANIES:
+            raise ValueError(
+                f"Too many companies ({len(v)}). Maximum is {_MAX_PORTFOLIO_COMPANIES}."
+            )
+        return v
 
 
 class PortfolioResponse(BaseModel):
@@ -530,19 +542,29 @@ class CorrelationResponse(BaseModel):
     interpretation: str
 
 
+_portfolio_lock = threading.Lock()
+
+
 def _get_portfolio_analyzer():
-    """Return a module-level singleton PortfolioAnalyzer."""
+    """Return a module-level singleton PortfolioAnalyzer (thread-safe)."""
     if not hasattr(_get_portfolio_analyzer, "_inst"):
-        from portfolio_analyzer import PortfolioAnalyzer
-        _get_portfolio_analyzer._inst = PortfolioAnalyzer()
+        with _portfolio_lock:
+            if not hasattr(_get_portfolio_analyzer, "_inst"):
+                from portfolio_analyzer import PortfolioAnalyzer
+                _get_portfolio_analyzer._inst = PortfolioAnalyzer()
     return _get_portfolio_analyzer._inst
 
 
+_compliance_lock = threading.Lock()
+
+
 def _get_compliance_scorer():
-    """Return a module-level singleton ComplianceScorer."""
+    """Return a module-level singleton ComplianceScorer (thread-safe)."""
     if not hasattr(_get_compliance_scorer, "_inst"):
-        from compliance_scorer import ComplianceScorer
-        _get_compliance_scorer._inst = ComplianceScorer()
+        with _compliance_lock:
+            if not hasattr(_get_compliance_scorer, "_inst"):
+                from compliance_scorer import ComplianceScorer
+                _get_compliance_scorer._inst = ComplianceScorer()
     return _get_compliance_scorer._inst
 
 

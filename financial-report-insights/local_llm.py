@@ -198,6 +198,7 @@ class LocalLLM:
         """
         self.model = model
         self._cache: OrderedDict[str, str] | None = OrderedDict() if enable_cache else None
+        self._cache_lock = threading.Lock()
         try:
             from config import settings as _cfg
             self._cache_maxsize = _cfg.llm_cache_maxsize
@@ -233,9 +234,10 @@ class LocalLLM:
         # Check cache first
         if self._cache is not None:
             cache_key = self._cache_key(prompt)
-            if cache_key in self._cache:
-                logger.debug("LLM cache hit")
-                return self._cache[cache_key]
+            with self._cache_lock:
+                if cache_key in self._cache:
+                    logger.debug("LLM cache hit")
+                    return self._cache[cache_key]
 
         # Execute through circuit breaker (wraps retry logic)
         result = self._circuit_breaker.call(self._generate_with_retry, prompt)
@@ -243,9 +245,10 @@ class LocalLLM:
         # Store in cache (bounded LRU)
         if self._cache is not None:
             cache_key = self._cache_key(prompt)
-            self._cache[cache_key] = result
-            if len(self._cache) > self._cache_maxsize:
-                self._cache.popitem(last=False)
+            with self._cache_lock:
+                self._cache[cache_key] = result
+                if len(self._cache) > self._cache_maxsize:
+                    self._cache.popitem(last=False)
 
         return result
 

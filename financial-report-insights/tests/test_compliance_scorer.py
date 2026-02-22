@@ -403,3 +403,53 @@ class TestRegulatoryThresholdBoundary:
         lev_check = [r for r in result.thresholds_checked if "Leverage" in r.rule_name]
         if lev_check:
             assert lev_check[0].passes is False
+
+
+# ---------------------------------------------------------------------------
+# Score clamping boundary tests
+# ---------------------------------------------------------------------------
+
+
+class TestScoreClamping:
+    """Verify all score outputs are clamped to [0, 100]."""
+
+    def test_sox_score_never_negative(self, scorer):
+        """SOX score should be >= 0 even with many material weaknesses."""
+        data = FinancialData(
+            revenue=10_000_000, net_income=-5_000_000,
+            operating_income=-5_000_000, operating_cash_flow=-1_000_000,
+            total_equity=-10_000_000, total_assets=10_000_000,
+            ebit=-1_000_000, interest_expense=500_000,
+            accounts_receivable=6_000_000,
+        )
+        result = scorer.sox_compliance(data)
+        assert 0 <= result.risk_score <= 100
+
+    def test_sox_score_never_above_100(self, scorer, compliant_company):
+        """SOX score should be <= 100 even for perfectly compliant company."""
+        result = scorer.sox_compliance(compliant_company)
+        assert 0 <= result.risk_score <= 100
+
+    def test_sec_score_never_negative(self, scorer):
+        """SEC filing quality should be >= 0 for empty data."""
+        data = FinancialData()
+        result = scorer.sec_filing_quality(data)
+        assert 0 <= result.disclosure_score <= 100
+
+    def test_audit_risk_score_clamped(self, scorer):
+        """Audit risk total should stay within [0, 100]."""
+        data = FinancialData(
+            revenue=10_000_000, net_income=-5_000_000,
+            operating_income=-5_000_000, operating_cash_flow=-1_000_000,
+            total_equity=-10_000_000, total_assets=10_000_000,
+            ebit=-1_000_000, interest_expense=500_000,
+        )
+        result = scorer.audit_risk_assessment(data)
+        assert 0 <= result.score <= 100
+
+    def test_grade_mapping_comprehensive(self):
+        """_score_to_grade handles all ranges."""
+        assert _score_to_grade(95) == "A"
+        assert _score_to_grade(80) in ("A", "B")
+        assert _score_to_grade(0) in ("D", "F")
+        assert _score_to_grade(100) == "A"
