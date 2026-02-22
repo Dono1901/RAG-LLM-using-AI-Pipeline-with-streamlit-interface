@@ -7487,7 +7487,7 @@ class CharlieAnalyzer:
         capex = data.capex
         ebitda = data.ebitda
         equity = data.total_equity
-        re = data.retained_earnings
+        ret_earn = data.retained_earnings
         ca = data.current_assets
         cl = data.current_liabilities
 
@@ -7534,8 +7534,8 @@ class CharlieAnalyzer:
 
         # --- Retained earnings ratio: RE / Equity ---
         re_ratio = None
-        if re is not None and equity and equity > 0:
-            re_ratio = safe_divide(re, equity)
+        if ret_earn is not None and equity and equity > 0:
+            re_ratio = safe_divide(ret_earn, equity)
 
         # --- Scoring (start at 5.0) ---
         score = 5.0
@@ -7616,7 +7616,7 @@ class CharlieAnalyzer:
         ca = data.current_assets
         cl = data.current_liabilities
         ta = data.total_assets
-        re = data.retained_earnings
+        ret_earn = data.retained_earnings
         ebit = data.ebit
         eq = data.total_equity
         tl = data.total_liabilities
@@ -7627,7 +7627,7 @@ class CharlieAnalyzer:
         if ca is not None and cl is not None and ta and ta > 0:
             wc_ta = (ca - cl) / ta
 
-        re_ta = safe_divide(re, ta)
+        re_ta = safe_divide(ret_earn, ta)
         ebit_ta = safe_divide(ebit, ta)
         eq_tl = safe_divide(eq, tl)
         rev_ta = safe_divide(rev, ta)
@@ -12779,13 +12779,13 @@ class CharlieAnalyzer:
         div = data.dividends_paid or 0
         te = data.total_equity or 0
         ta = data.total_assets or 0
-        re = data.retained_earnings or 0
+        ret_earn = data.retained_earnings or 0
 
         plowback = ni - div
         result.plowback_amount = plowback
         result.retention_ratio = safe_divide(plowback, ni)
         result.payout_ratio = safe_divide(div, ni)
-        result.re_to_equity = safe_divide(re, te)
+        result.re_to_equity = safe_divide(ret_earn, te)
 
         # Sustainable growth rate = ROE * retention ratio
         roe = safe_divide(ni, te)
@@ -13392,9 +13392,9 @@ class CharlieAnalyzer:
             result.roa_pct = safe_divide(ni, ta) * 100 if safe_divide(ni, ta) is not None else None
 
         # Retention & sustainable growth
-        re = data.retained_earnings
-        if ni is not None and ni > 0 and re is not None:
-            dividends_paid = ni - re if re < ni else 0
+        ret_earn = data.retained_earnings
+        if ni is not None and ni > 0 and ret_earn is not None:
+            dividends_paid = ni - ret_earn if ret_earn < ni else 0
             result.retention_ratio = safe_divide(ni - dividends_paid, ni)
             if result.roe_pct is not None and result.retention_ratio is not None:
                 result.sustainable_growth_rate = (result.roe_pct / 100) * result.retention_ratio * 100
