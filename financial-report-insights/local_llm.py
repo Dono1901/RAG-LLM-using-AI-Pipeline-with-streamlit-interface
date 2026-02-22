@@ -5,7 +5,6 @@ Replaces Claude Sonnet with a free, local model.
 
 import hashlib
 import logging
-import signal
 import threading
 import time
 from collections import OrderedDict

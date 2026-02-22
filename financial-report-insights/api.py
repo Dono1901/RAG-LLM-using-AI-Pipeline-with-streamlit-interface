@@ -10,7 +10,6 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request

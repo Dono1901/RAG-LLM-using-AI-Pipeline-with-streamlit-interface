@@ -3,12 +3,11 @@ Visualization Utilities for Financial Insights Dashboard.
 Reusable Plotly components for CFO-grade financial visualizations.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 
 

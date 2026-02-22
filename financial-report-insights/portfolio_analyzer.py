@@ -16,7 +16,6 @@ import numpy as np
 from export_utils import score_to_grade as _score_to_grade
 from financial_analyzer import (
     CharlieAnalyzer,
-    CompositeHealthScore,
     FinancialData,
     safe_divide,
 )

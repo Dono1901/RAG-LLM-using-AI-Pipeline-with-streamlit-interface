@@ -6,15 +6,15 @@ Interactive Streamlit page with Plotly visualizations for CFO-grade financial in
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 
 from config import settings
-from excel_processor import ExcelProcessor, WorkbookData, SheetData
-from financial_analyzer import CharlieAnalyzer, FinancialData, CustomKPIDefinition, PeerCompanyData, quick_analyze
+from excel_processor import ExcelProcessor, WorkbookData
+from financial_analyzer import CharlieAnalyzer, FinancialData, CustomKPIDefinition, PeerCompanyData
 from viz_utils import FinancialVizUtils
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,7 @@ Each ratio is defined once with scoring thresholds and adjustments, then compute
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple, Callable
+from typing import Optional, List, Dict, Tuple
 from enum import Enum
 
 from financial_analyzer import FinancialData, safe_divide
