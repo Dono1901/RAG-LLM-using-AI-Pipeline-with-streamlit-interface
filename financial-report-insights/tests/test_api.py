@@ -312,6 +312,52 @@ class TestExportEndpoints:
         })
         assert resp.status_code == 501
 
+    def test_export_xlsx_happy_path(self, client, mock_rag):
+        """XLSX export returns a valid streaming response."""
+        mock_rag.charlie_analyzer.analyze.return_value = {"health": "good"}
+        mock_rag.charlie_analyzer.generate_report.return_value = "Summary report."
+        with patch("export_xlsx.FinancialExcelExporter") as MockExporter:
+            MockExporter.return_value.export_full_report.return_value = b"PK\x03\x04fake_xlsx"
+            resp = client.post("/export/xlsx", json={
+                "financial_data": {"revenue": 1000, "total_assets": 5000},
+            })
+        assert resp.status_code == 200
+        assert "spreadsheetml" in resp.headers["content-type"]
+        assert resp.headers["content-disposition"].endswith('.xlsx"')
+        assert len(resp.content) > 0
+
+    def test_export_pdf_happy_path(self, client, mock_rag):
+        """PDF export returns a valid streaming response."""
+        mock_rag.charlie_analyzer.analyze.return_value = {"health": "good"}
+        mock_rag.charlie_analyzer.generate_report.return_value = "Summary report."
+        with patch("export_pdf.FinancialPDFExporter") as MockExporter:
+            MockExporter.return_value.export_full_report.return_value = b"%PDF-1.4 fake"
+            resp = client.post("/export/pdf", json={
+                "financial_data": {"revenue": 1000, "total_assets": 5000},
+            })
+        assert resp.status_code == 200
+        assert "pdf" in resp.headers["content-type"]
+        assert resp.headers["content-disposition"].endswith('.pdf"')
+        assert len(resp.content) > 0
+
+    def test_export_xlsx_analyzer_error(self, client, mock_rag):
+        """Analyzer exception during export should return 422."""
+        mock_rag.charlie_analyzer.analyze.side_effect = ValueError("bad data")
+        resp = client.post("/export/xlsx", json={
+            "financial_data": {"revenue": 1000},
+        })
+        assert resp.status_code == 422
+        assert "Could not generate" in resp.json()["detail"]
+
+    def test_export_pdf_analyzer_error(self, client, mock_rag):
+        """Analyzer exception during export should return 422."""
+        mock_rag.charlie_analyzer.analyze.side_effect = ValueError("bad data")
+        resp = client.post("/export/pdf", json={
+            "financial_data": {"revenue": 1000},
+        })
+        assert resp.status_code == 422
+        assert "Could not generate" in resp.json()["detail"]
+
 
 # ---------------------------------------------------------------------------
 # Analyze exception handling (Coverage gap 12)

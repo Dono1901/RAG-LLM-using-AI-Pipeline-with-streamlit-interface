@@ -445,11 +445,18 @@ async def export_xlsx(req: ExportRequest):
     if not rag.charlie_analyzer:
         raise HTTPException(status_code=501, detail="Financial analyzer not available.")
 
-    analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
-    report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
+    try:
+        analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
+        report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
 
-    exporter = FinancialExcelExporter()
-    xlsx_bytes = exporter.export_full_report(data, analysis, report=report)
+        exporter = FinancialExcelExporter()
+        xlsx_bytes = exporter.export_full_report(data, analysis, report=report)
+    except Exception as exc:
+        logger.warning("XLSX export failed: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Could not generate XLSX export.",
+        ) from exc
 
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
@@ -469,11 +476,18 @@ async def export_pdf(req: ExportRequest):
     if not rag.charlie_analyzer:
         raise HTTPException(status_code=501, detail="Financial analyzer not available.")
 
-    analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
-    report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
+    try:
+        analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
+        report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
 
-    exporter = FinancialPDFExporter()
-    pdf_bytes = exporter.export_full_report(data, analysis, report=report)
+        exporter = FinancialPDFExporter()
+        pdf_bytes = exporter.export_full_report(data, analysis, report=report)
+    except Exception as exc:
+        logger.warning("PDF export failed: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Could not generate PDF export.",
+        ) from exc
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

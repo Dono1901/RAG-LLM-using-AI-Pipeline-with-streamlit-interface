@@ -381,3 +381,88 @@ class TestComplianceRegulatory:
         body = resp.json()
         assert len(body["critical_failures"]) > 0
         assert body["fail_count"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Error-path tests for portfolio endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestPortfolioErrorPaths:
+    """Validate that portfolio endpoints reject bad input gracefully."""
+
+    def test_portfolio_analyze_empty_companies_rejected(self, client):
+        """Empty companies dict should be rejected by Pydantic (min_length=1)."""
+        resp = client.post("/portfolio/analyze", json={"companies": {}})
+        assert resp.status_code == 422
+
+    def test_portfolio_correlation_empty_companies_rejected(self, client):
+        """Empty companies dict should be rejected by Pydantic (min_length=1)."""
+        resp = client.post("/portfolio/correlation", json={"companies": {}})
+        assert resp.status_code == 422
+
+    def test_portfolio_analyze_missing_body(self, client):
+        """Missing request body should return 422."""
+        resp = client.post("/portfolio/analyze")
+        assert resp.status_code == 422
+
+    def test_portfolio_correlation_missing_body(self, client):
+        """Missing request body should return 422."""
+        resp = client.post("/portfolio/correlation")
+        assert resp.status_code == 422
+
+    def test_portfolio_analyze_single_company_ok(self, client):
+        """Single company should still work (min_length=1)."""
+        resp = client.post("/portfolio/analyze", json={
+            "companies": {"Solo": _strong_company_data()},
+        })
+        assert resp.status_code == 200
+        assert resp.json()["num_companies"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Error-path tests for compliance endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestComplianceErrorPaths:
+    """Validate that compliance endpoints reject bad input gracefully."""
+
+    def test_compliance_analyze_missing_body(self, client):
+        """Missing request body should return 422."""
+        resp = client.post("/compliance/analyze")
+        assert resp.status_code == 422
+
+    def test_compliance_sox_missing_body(self, client):
+        """Missing request body should return 422."""
+        resp = client.post("/compliance/sox")
+        assert resp.status_code == 422
+
+    def test_compliance_regulatory_missing_body(self, client):
+        """Missing request body should return 422."""
+        resp = client.post("/compliance/regulatory")
+        assert resp.status_code == 422
+
+    def test_compliance_analyze_empty_data_ok(self, client):
+        """Empty financial data should still work (graceful defaults)."""
+        resp = client.post("/compliance/analyze", json={"financial_data": {}})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "sox_risk" in body
+        assert "going_concern" in body
+
+    def test_compliance_sox_empty_data_ok(self, client):
+        """SOX check with empty data should return valid structure."""
+        resp = client.post("/compliance/sox", json={"financial_data": {}})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "overall_risk" in body
+        assert "flags" in body
+
+    def test_compliance_regulatory_empty_data_ok(self, client):
+        """Regulatory check with empty data should return valid structure."""
+        resp = client.post("/compliance/regulatory", json={"financial_data": {}})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "pass_count" in body
+        assert "fail_count" in body

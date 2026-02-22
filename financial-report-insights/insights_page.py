@@ -304,6 +304,7 @@ class FinancialInsightsPage:
                     selected_sheet = st.selectbox("Select Sheet", ["All Sheets"] + sheet_names)
             except Exception as e:
                 st.error(f"Error reading sheets: {e}")
+                logger.exception("Failed to read sheet names")
 
         # File info
         if selected_file:
