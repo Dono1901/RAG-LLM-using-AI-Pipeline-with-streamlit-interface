@@ -97,7 +97,10 @@ class TestNeo4jStoreConnect:
     def test_returns_store_on_success(self):
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        with patch.dict("os.environ", {"NEO4J_URI": "bolt://localhost:7687"}):
+        with patch.dict("os.environ", {
+            "NEO4J_URI": "bolt://localhost:7687",
+            "NEO4J_PASSWORD": "password123"
+        }):
             with patch("neo4j.GraphDatabase") as mock_gdb:
                 mock_gdb.driver.return_value = mock_driver
                 store = Neo4jStore.connect()
@@ -607,3 +610,540 @@ class TestNeo4jPasswordRequired:
                 assert store is not None
                 mock_neo4j.GraphDatabase.driver.assert_called_once()
                 mock_driver.verify_connectivity.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Error path tests: driver.session() throws, empty results, None data
+# ---------------------------------------------------------------------------
+
+
+class TestGraphStoreErrorPaths:
+    """Comprehensive error path testing for Neo4jStore.
+
+    Tests scenarios where:
+    - driver.session() throws an exception
+    - session.run() returns empty results
+    - methods receive None or empty data
+    - driver is closed/unavailable
+    """
+
+    # -----------------------------------------------------------------------
+    # driver.session() throws (connection layer failures)
+    # -----------------------------------------------------------------------
+
+    def test_ensure_schema_when_session_throws(self):
+        """ensure_schema gracefully handles session() failure."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Neo4j unreachable")
+        store = Neo4jStore(mock_driver)
+
+        # Should raise because ensure_schema does not catch session() failures
+        with pytest.raises(Exception, match="Neo4j unreachable"):
+            store.ensure_schema(1024, "mxbai-embed-large")
+
+    def test_store_chunks_when_session_throws(self):
+        """store_chunks handles session() failure gracefully."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Connection refused")
+        store = Neo4jStore(mock_driver)
+
+        result = store.store_chunks(
+            [{"content": "test", "source": "f.pdf"}],
+            [[0.1] * 10],
+            "f.pdf"
+        )
+        assert result == 0  # Returns 0 on exception
+
+    def test_store_financial_data_when_session_throws(self):
+        """store_financial_data handles session() failure gracefully."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("DB timeout")
+        store = Neo4jStore(mock_driver)
+
+        store.store_financial_data(
+            doc_id="report.pdf",
+            period_label="FY2024",
+            ratios={"current_ratio": {"value": 2.1, "category": "liquidity"}},
+        )
+        # No exception raised; logged as warning internally
+
+    def test_store_line_items_when_session_throws(self):
+        """store_line_items handles session() failure gracefully."""
+        from graph_store import Neo4jStore
+        from financial_analyzer import FinancialData
+
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Network error")
+        store = Neo4jStore(mock_driver)
+
+        fd = FinancialData(revenue=1_000_000, total_assets=5_000_000)
+        count = store.store_line_items(fd, "period_id_123")
+        assert count == 0
+
+    def test_vector_search_when_session_throws(self):
+        """vector_search returns empty list when session() throws."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Session creation failed")
+        store = Neo4jStore(mock_driver)
+
+        results = store.vector_search([0.1] * 10, top_k=5)
+        assert results == []
+
+    def test_graph_search_when_session_throws_on_context(self):
+        """graph_search degrades to vector results when context query fails."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        # Vector search succeeds, context query fails
+        vector_result = MagicMock()
+        vector_result.__iter__ = MagicMock(return_value=iter([
+            {"chunk_id": "abc", "content": "data", "source": "r.pdf", "score": 0.9}
+        ]))
+
+        # First call to session.run() succeeds (vector), second fails (context)
+        mock_session.run.side_effect = [
+            vector_result,
+            Exception("Context query failed")
+        ]
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.graph_search([0.1] * 10, top_k=5)
+        # Degrades to vector-only results
+        assert len(results) == 1
+        assert results[0]["chunk_id"] == "abc"
+
+    def test_store_derived_from_edges_when_session_throws(self):
+        """store_derived_from_edges returns 0 on session failure."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Connection timeout")
+        store = Neo4jStore(mock_driver)
+
+        count = store.store_derived_from_edges("period_id_123")
+        assert count == 0
+
+    def test_link_fiscal_periods_when_session_throws(self):
+        """link_fiscal_periods returns 0 on session failure."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Session unavailable")
+        store = Neo4jStore(mock_driver)
+
+        count = store.link_fiscal_periods([
+            {"label": "FY2023", "period_id": "p1"},
+            {"label": "FY2024", "period_id": "p2"},
+        ])
+        assert count == 0
+
+    def test_store_credit_assessment_when_session_throws(self):
+        """store_credit_assessment returns None on session failure."""
+        from graph_store import Neo4jStore
+        from types import SimpleNamespace
+
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Neo4j down")
+        store = Neo4jStore(mock_driver)
+
+        scorecard = SimpleNamespace(
+            total_score=75, grade="B", recommendation="Approve",
+            category_scores={"profitability": 80, "leverage": 70},
+            strengths=["Growing revenue"], weaknesses=["High debt"]
+        )
+        debt_capacity = SimpleNamespace(
+            max_additional_debt=500000, current_leverage=0.6
+        )
+
+        result = store.store_credit_assessment("TestCo", scorecard, debt_capacity)
+        assert result is None
+
+    def test_store_covenant_package_when_session_throws(self):
+        """store_covenant_package returns None on session failure."""
+        from graph_store import Neo4jStore
+        from types import SimpleNamespace
+
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Connection lost")
+        store = Neo4jStore(mock_driver)
+
+        covenant_pkg = SimpleNamespace(
+            covenant_tier="standard",
+            financial_covenants={"debt_to_ebitda": 3.5, "interest_coverage": 2.0},
+            reporting_requirements=["Monthly financials"],
+            events_of_default=["Material breach"]
+        )
+
+        result = store.store_covenant_package("assessment_id_123", covenant_pkg)
+        assert result is None
+
+    def test_store_portfolio_analysis_when_session_throws(self):
+        """store_portfolio_analysis returns None on session failure."""
+        from graph_store import Neo4jStore
+        from types import SimpleNamespace
+
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("DB unavailable")
+        store = Neo4jStore(mock_driver)
+
+        risk_summary = SimpleNamespace(
+            avg_health_score=65.0, min_health_score=40, max_health_score=90,
+            overall_risk_level="moderate", distress_count=1,
+            risk_flags=["Company X distressed"]
+        )
+
+        result = store.store_portfolio_analysis(
+            "Portfolio1", ["CompanyA", "CompanyB"], risk_summary, 70
+        )
+        assert result is None
+
+    def test_store_compliance_report_when_session_throws(self):
+        """store_compliance_report returns None on session failure."""
+        from graph_store import Neo4jStore
+        from types import SimpleNamespace
+
+        mock_driver = MagicMock()
+        mock_driver.session.side_effect = Exception("Neo4j timeout")
+        store = Neo4jStore(mock_driver)
+
+        report = SimpleNamespace(
+            sox=SimpleNamespace(overall_risk="low", risk_score=85),
+            sec=SimpleNamespace(disclosure_score=75),
+            regulatory=SimpleNamespace(compliance_pct=90.0),
+            audit_risk=SimpleNamespace(risk_level="low", score=80, going_concern_risk=False)
+        )
+
+        result = store.store_compliance_report("CompanyX", report)
+        assert result is None
+
+    # -----------------------------------------------------------------------
+    # session.run() returns empty results
+    # -----------------------------------------------------------------------
+
+    def test_vector_search_empty_results(self):
+        """vector_search returns empty list when index returns no results."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        # Return empty iterator
+        empty_result = MagicMock()
+        empty_result.__iter__ = MagicMock(return_value=iter([]))
+        mock_session.run.return_value = empty_result
+
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.vector_search([0.1] * 10, top_k=5)
+        assert results == []
+
+    def test_ratios_by_period_label_empty_results(self):
+        """ratios_by_period_label returns empty list for non-existent period."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        empty_result = MagicMock()
+        empty_result.__iter__ = MagicMock(return_value=iter([]))
+        mock_session.run.return_value = empty_result
+
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.ratios_by_period_label("NonExistent2099")
+        assert results == []
+
+    def test_scores_by_period_label_empty_results(self):
+        """scores_by_period_label returns empty list for non-existent period."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        empty_result = MagicMock()
+        empty_result.__iter__ = MagicMock(return_value=iter([]))
+        mock_session.run.return_value = empty_result
+
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.scores_by_period_label("NonExistent2099")
+        assert results == []
+
+    def test_cross_period_ratio_trend_empty_results(self):
+        """cross_period_ratio_trend returns empty when no data matches."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        empty_result = MagicMock()
+        empty_result.__iter__ = MagicMock(return_value=iter([]))
+        mock_session.run.return_value = empty_result
+
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.cross_period_ratio_trend(["FAKE1", "FAKE2"])
+        assert results == []
+
+    def test_graph_search_empty_context_results(self):
+        """graph_search returns vector results unchanged when context is empty."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        # Vector search returns 1 result
+        vector_result = MagicMock()
+        vector_result.__iter__ = MagicMock(return_value=iter([
+            {"chunk_id": "xyz", "content": "revenue data", "source": "r.pdf", "score": 0.85}
+        ]))
+
+        # Context query returns empty
+        context_result = MagicMock()
+        context_result.__iter__ = MagicMock(return_value=iter([]))
+
+        mock_session.run.side_effect = [vector_result, context_result]
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.graph_search([0.1] * 10)
+        assert len(results) == 1
+        assert results[0]["chunk_id"] == "xyz"
+        # No enrichment should have happened
+        assert "document" not in results[0]
+
+    # -----------------------------------------------------------------------
+    # Methods receive None or empty data
+    # -----------------------------------------------------------------------
+
+    def test_store_chunks_with_empty_list(self):
+        """store_chunks handles empty chunk list gracefully."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        result = store.store_chunks([], [], "empty.pdf")
+        assert result == 0
+
+    def test_store_chunks_with_none_values_in_chunk(self):
+        """store_chunks fails gracefully when chunk has explicit None content."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        chunks = [
+            {"content": None, "source": "f.pdf", "type": "pdf"},  # explicit None
+            {"source": "f.pdf", "type": "pdf"}  # missing content key
+        ]
+        embeddings = [[0.1] * 10, [0.2] * 10]
+
+        result = store.store_chunks(chunks, embeddings, "f.pdf")
+        # Should return 0 because slicing None raises TypeError, caught and logged
+        assert result == 0
+
+    def test_store_financial_data_with_empty_ratios_and_scores(self):
+        """store_financial_data handles None ratios and scores."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        # Both ratios and scores are None
+        store.store_financial_data(
+            doc_id="report.pdf",
+            period_label="FY2024",
+            ratios=None,
+            scores=None
+        )
+        # Should still create FiscalPeriod node
+        mock_session.run.assert_called()
+        assert mock_session.run.call_count >= 1
+
+    def test_store_line_items_with_all_none_values(self):
+        """store_line_items handles FinancialData with all None fields."""
+        from graph_store import Neo4jStore
+        from financial_analyzer import FinancialData
+
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        fd = FinancialData()  # All fields None by default
+        count = store.store_line_items(fd, "period_id_123")
+        # No line items should be created
+        assert count == 0
+
+    def test_link_fiscal_periods_with_empty_list(self):
+        """link_fiscal_periods returns 0 for empty period list."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore(mock_driver)
+
+        result = store.link_fiscal_periods([])
+        assert result == 0
+
+    def test_link_fiscal_periods_with_single_period(self):
+        """link_fiscal_periods returns 0 when fewer than 2 periods."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore(mock_driver)
+
+        result = store.link_fiscal_periods([
+            {"label": "FY2024", "period_id": "p1"}
+        ])
+        assert result == 0
+
+    def test_store_portfolio_analysis_with_empty_company_list(self):
+        """store_portfolio_analysis works with empty company names."""
+        from graph_store import Neo4jStore
+        from types import SimpleNamespace
+
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        risk_summary = SimpleNamespace(
+            avg_health_score=0.0, min_health_score=0, max_health_score=0,
+            overall_risk_level="unknown", distress_count=0, risk_flags=[]
+        )
+
+        result = store.store_portfolio_analysis("EmptyPortfolio", [], risk_summary, 0)
+        assert isinstance(result, str)
+
+    # -----------------------------------------------------------------------
+    # Driver is closed/unavailable
+    # -----------------------------------------------------------------------
+
+    def test_close_is_idempotent(self):
+        """close() can be called multiple times safely."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        store = Neo4jStore(mock_driver)
+
+        # Call close multiple times
+        store.close()
+        store.close()
+        store.close()
+
+        # Should have called driver.close() 3 times
+        assert mock_driver.close.call_count == 3
+
+    def test_close_when_driver_throws(self):
+        """close() handles driver.close() exceptions silently."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_driver.close.side_effect = Exception("Already closed")
+        store = Neo4jStore(mock_driver)
+
+        # Should not raise
+        store.close()
+        mock_driver.close.assert_called_once()
+
+    def test_operations_after_close_still_fail_gracefully(self):
+        """Operations after close() fail gracefully without crashing."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        # After close, session() will fail
+        mock_driver.session.side_effect = Exception("Driver is closed")
+        store = Neo4jStore(mock_driver)
+
+        store.close()
+
+        # Subsequent operations should fail gracefully
+        result = store.vector_search([0.1] * 10)
+        assert result == []
+
+    # -----------------------------------------------------------------------
+    # Edge cases with run() returning records with None values
+    # -----------------------------------------------------------------------
+
+    def test_vector_search_with_none_chunk_id(self):
+        """vector_search handles records with None chunk_id."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        # Record with None chunk_id
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter([
+            {"chunk_id": None, "content": "data", "source": "r.pdf", "score": 0.9}
+        ]))
+        mock_session.run.return_value = mock_result
+
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.vector_search([0.1] * 10)
+        # Should still return the record even with None chunk_id
+        assert len(results) == 1
+        assert results[0]["chunk_id"] is None
+
+    def test_graph_search_with_none_chunk_id_in_context(self):
+        """graph_search handles context records with None chunk_id."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+
+        # Vector search result
+        vector_result = MagicMock()
+        vector_result.__iter__ = MagicMock(return_value=iter([
+            {"chunk_id": "xyz", "content": "data", "source": "r.pdf", "score": 0.9}
+        ]))
+
+        # Context with None chunk_id (shouldn't happen but handle it)
+        context_result = MagicMock()
+        context_result.__iter__ = MagicMock(return_value=iter([
+            {"chunk_id": None, "document": "r.pdf", "period": "FY2024", "ratios": [], "scores": []}
+        ]))
+
+        mock_session.run.side_effect = [vector_result, context_result]
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        results = store.graph_search([0.1] * 10)
+        # Vector result should be returned with no enrichment
+        assert len(results) == 1
+        assert results[0]["chunk_id"] == "xyz"
+
+    def test_store_chunks_with_mismatched_embedding_count(self):
+        """store_chunks handles mismatch between chunks and embeddings counts."""
+        from graph_store import Neo4jStore
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+
+        store = Neo4jStore(mock_driver)
+        chunks = [
+            {"content": "chunk 1", "source": "f.pdf"},
+            {"content": "chunk 2", "source": "f.pdf"},
+            {"content": "chunk 3", "source": "f.pdf"},
+        ]
+        embeddings = [[0.1] * 10, [0.2] * 10]  # Only 2, not 3
+
+        # zip() will stop at the shorter sequence
+        result = store.store_chunks(chunks, embeddings, "f.pdf")
+        assert result == 2  # Only 2 pairs processed by zip()

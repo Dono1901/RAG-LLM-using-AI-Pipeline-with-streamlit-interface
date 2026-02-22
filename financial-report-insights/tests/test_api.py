@@ -33,10 +33,12 @@ def client(mock_rag):
     """TestClient with the RAG singleton patched."""
     import api as api_module
     api_module._rag_instance = mock_rag
+    api_module._rate_log.clear()
     from api import app
     with TestClient(app) as c:
         yield c
     api_module._rag_instance = None
+    api_module._rate_log.clear()
 
 
 # ---------------------------------------------------------------------------

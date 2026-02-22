@@ -738,4 +738,4 @@ class Neo4jStore:
             self._driver.close()
             logger.info("Neo4j connection closed")
         except Exception:
-            pass
+            logger.debug("Error closing Neo4j driver", exc_info=True)
