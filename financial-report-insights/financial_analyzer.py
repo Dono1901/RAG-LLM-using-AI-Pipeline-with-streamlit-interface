@@ -5599,25 +5599,26 @@ class CharlieAnalyzer:
 
         # --- Accrual ratio ---
         accrual_ratio = None
-        if ni is not None and ocf is not None and ta and abs(ta) > 1e-12:
-            accrual_ratio = (ni - ocf) / ta
-            if accrual_ratio < -0.05:
-                score += 2.0
-                indicators.append("Very low accruals – earnings strongly backed by cash")
-            elif accrual_ratio < 0.05:
-                score += 1.0
-                indicators.append("Low accruals – good earnings quality")
-            elif accrual_ratio < 0.15:
-                indicators.append("Moderate accruals – monitor working capital changes")
-            else:
-                score -= 2.0
-                indicators.append("High accruals – earnings may not be sustainable")
+        if ni is not None and ocf is not None:
+            accrual_ratio = safe_divide(ni - ocf, ta)
+            if accrual_ratio is not None:
+                if accrual_ratio < -0.05:
+                    score += 2.0
+                    indicators.append("Very low accruals – earnings strongly backed by cash")
+                elif accrual_ratio < 0.05:
+                    score += 1.0
+                    indicators.append("Low accruals – good earnings quality")
+                elif accrual_ratio < 0.15:
+                    indicators.append("Moderate accruals – monitor working capital changes")
+                else:
+                    score -= 2.0
+                    indicators.append("High accruals – earnings may not be sustainable")
 
         # --- Cash-to-income ratio ---
         cash_to_income = None
-        if ni is not None and ocf is not None and abs(ni) > 1e-12:
-            cash_to_income = ocf / ni
-            if ni > 0:
+        if ni is not None and ocf is not None:
+            cash_to_income = safe_divide(ocf, ni)
+            if cash_to_income is not None and ni > 0:
                 if cash_to_income >= 1.2:
                     score += 1.5
                     indicators.append("Cash flow exceeds net income – strong cash generation")
@@ -5629,7 +5630,7 @@ class CharlieAnalyzer:
                 else:
                     score -= 1.5
                     indicators.append("Cash flow well below net income – investigate accruals")
-            else:
+            elif ni is not None and ni < 0:
                 # Negative NI: if OCF is positive, credit the company
                 if ocf > 0:
                     score += 1.0
@@ -6699,15 +6700,15 @@ class CharlieAnalyzer:
 
         # --- Margin of safety = (EBIT - Interest) / Interest ---
         margin_safety = None
-        if ebit is not None and interest > 0:
-            margin_safety = (ebit - interest) / interest
+        if ebit is not None:
+            margin_safety = safe_divide(ebit - interest, interest)
 
         # --- Return per unit risk ---
         # Use ROE / (Debt/Equity ratio), higher = better risk-adjusted
         de_ratio = safe_divide(debt, equity) if equity is not None and equity > 0 else None
         return_per_risk = None
-        if roe is not None and de_ratio is not None and de_ratio > 0:
-            return_per_risk = roe / de_ratio
+        if roe is not None and de_ratio is not None:
+            return_per_risk = safe_divide(roe, de_ratio)
 
         # --- Scoring (0-10) ---
         score = 5.0
@@ -6853,8 +6854,8 @@ class CharlieAnalyzer:
 
         # --- Margin of safety % = (intrinsic - book) / intrinsic ---
         mos_pct = None
-        if intrinsic is not None and bv_proxy is not None and intrinsic > 0:
-            mos_pct = (intrinsic - bv_proxy) / intrinsic
+        if intrinsic is not None and bv_proxy is not None:
+            mos_pct = safe_divide(intrinsic - bv_proxy, intrinsic)
 
         # --- Scoring (0-10) ---
         score = 5.0
@@ -7624,8 +7625,8 @@ class CharlieAnalyzer:
 
         # Component ratios
         wc_ta = None
-        if ca is not None and cl is not None and ta and ta > 0:
-            wc_ta = (ca - cl) / ta
+        if ca is not None and cl is not None:
+            wc_ta = safe_divide(ca - cl, ta)
 
         re_ta = safe_divide(ret_earn, ta)
         ebit_ta = safe_divide(ebit, ta)
