@@ -8,6 +8,7 @@ across multiple companies and layers portfolio-level logic on top.
 """
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -225,7 +226,10 @@ class PortfolioAnalyzer:
 
         # Compute company-vs-company correlation (transpose: ratio vecs per company)
         # Use corrcoef on the rows (each row = one company's ratio profile)
-        corr = np.corrcoef(ratio_matrix)
+        # Suppress expected RuntimeWarning when a company has constant (all-zero) ratios
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            corr = np.corrcoef(ratio_matrix)
 
         # Average off-diagonal correlation, excluding NaN pairs
         if n > 1:

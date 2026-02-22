@@ -35,10 +35,12 @@ def mock_rag():
 def client(mock_rag):
     import api as api_module
     api_module._rag_instance = mock_rag
+    api_module._rate_log.clear()
     from api import app
     with TestClient(app) as c:
         yield c
     api_module._rag_instance = None
+    api_module._rate_log.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -159,3 +161,88 @@ class TestTemporalEdgeCreation:
         driver = MagicMock()
         store = Neo4jStore(driver)
         assert store.link_fiscal_periods([{"label": "FY2024", "period_id": "p1"}]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Compare endpoint edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestCompareEdgeCases:
+    def test_compare_graph_exception_triggers_fallback(self, client, mock_rag):
+        """When graph store throws, should fall back to in-memory gracefully."""
+        mock_store = MagicMock()
+        mock_store.cross_period_ratio_trend.side_effect = RuntimeError("DB down")
+        mock_rag._graph_store = mock_store
+
+        resp = client.post("/compare", json={"period_labels": ["FY2023", "FY2024"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        # Graph trend data should be None since graph failed
+        assert body["graph_trend_data"] is None
+        assert "Compared 2 periods" in body["summary"]
+
+    def test_compare_graph_returns_empty_list(self, client, mock_rag):
+        """When graph returns [], should fall back to in-memory."""
+        mock_store = MagicMock()
+        mock_store.cross_period_ratio_trend.return_value = []
+        mock_rag._graph_store = mock_store
+
+        resp = client.post("/compare", json={"period_labels": ["FY2023", "FY2024"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["graph_trend_data"] is None
+
+    def test_compare_max_periods_10(self, client, mock_rag):
+        """Max 10 periods should be accepted."""
+        labels = [f"FY{2015 + i}" for i in range(10)]
+        resp = client.post("/compare", json={"period_labels": labels})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["periods_compared"]) == 10
+
+    def test_compare_rejects_11_periods(self, client, mock_rag):
+        """More than 10 periods should be rejected by validation."""
+        labels = [f"FY{2010 + i}" for i in range(11)]
+        resp = client.post("/compare", json={"period_labels": labels})
+        assert resp.status_code == 422
+
+    def test_compare_identical_periods_zero_delta(self, client, mock_rag):
+        """Identical period labels should produce zero deltas."""
+        mock_store = MagicMock()
+        mock_store.cross_period_ratio_trend.return_value = [
+            {"period": "FY2024", "ratio_name": "ROA", "value": 0.08, "category": "profitability"},
+            {"period": "FY2024", "ratio_name": "ROA", "value": 0.08, "category": "profitability"},
+        ]
+        mock_rag._graph_store = mock_store
+
+        resp = client.post("/compare", json={"period_labels": ["FY2024", "FY2024"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        for d in body["deltas"]:
+            if d["delta"] is not None:
+                assert d["delta"] == pytest.approx(0.0)
+        # No improvements or deteriorations for zero delta
+        assert len(body["improvements"]) == 0
+        assert len(body["deteriorations"]) == 0
+
+    def test_compare_graph_row_missing_ratio_name(self, client, mock_rag):
+        """Graph row with no ratio_name should be skipped."""
+        mock_store = MagicMock()
+        mock_store.cross_period_ratio_trend.return_value = [
+            {"period": "FY2023", "ratio_name": "", "value": 1.0, "category": ""},
+            {"period": "FY2024", "ratio_name": "ROA", "value": 0.08, "category": "profitability"},
+        ]
+        mock_rag._graph_store = mock_store
+
+        resp = client.post("/compare", json={"period_labels": ["FY2023", "FY2024"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        # Only ROA should appear (blank ratio_name skipped)
+        ratio_names = [d["ratio_name"] for d in body["deltas"]]
+        assert "" not in ratio_names
+
+    def test_compare_missing_body(self, client, mock_rag):
+        """Missing request body should return 422."""
+        resp = client.post("/compare")
+        assert resp.status_code == 422
