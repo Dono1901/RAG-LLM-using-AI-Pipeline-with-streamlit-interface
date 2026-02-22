@@ -95,9 +95,10 @@ class TestProbabilityWeightedScenarios:
         result = analyzer.probability_weighted_scenarios(sample_data, scenario_probs)
         assert isinstance(result, ProbabilityWeightedResult)
         assert len(result.scenarios) == 3
-        assert result.expected_health_score is not None
-        assert result.expected_z_score is not None
-        assert result.distress_probability is not None
+        # Verify expected values are numeric and in reasonable ranges
+        assert 0 <= result.expected_health_score <= 100
+        assert isinstance(result.expected_z_score, (int, float))
+        assert 0.0 <= result.distress_probability <= 1.0
 
     def test_probabilities_normalised(self, analyzer, sample_data):
         scenario_probs = [

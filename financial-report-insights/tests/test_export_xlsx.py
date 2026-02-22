@@ -61,7 +61,7 @@ class TestFinancialExcelExporter:
     ):
         result = exporter.export_full_report(sample_data, sample_results)
         assert isinstance(result, bytes)
-        assert len(result) > 0
+        assert len(result) > 1000  # A real XLSX with content should be at least 1KB
         # XLSX magic bytes (PK zip archive)
         assert result[:2] == b"PK"
 

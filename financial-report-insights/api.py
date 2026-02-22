@@ -362,6 +362,7 @@ async def compare_periods(req: CompareRequest):
                         elif delta < 0:
                             deteriorations.append(f"{rname}: {delta:.4f}")
         except Exception as exc:
+            # Intentional graceful degradation: graph is optional, fall back to in-memory
             logger.debug("Graph comparison failed, using in-memory: %s", exc)
 
     # In-memory fallback: use cached FinancialData
@@ -405,6 +406,7 @@ async def compare_periods(req: CompareRequest):
                         elif d.delta < 0:
                             deteriorations.append(f"{d.ratio_name}: {d.delta:.4f}")
             except Exception as exc:
+                # Intentional graceful degradation: return empty deltas rather than 500
                 logger.debug("In-memory comparison failed: %s", exc)
 
     n_improvements = len(improvements)

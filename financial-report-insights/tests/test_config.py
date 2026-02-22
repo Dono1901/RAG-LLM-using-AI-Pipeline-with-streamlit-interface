@@ -172,3 +172,11 @@ class TestSingleton:
         from config import Settings, settings
 
         assert isinstance(settings, Settings)
+
+    def test_singleton_has_expected_defaults(self):
+        from config import settings
+
+        # Verify key defaults are populated with sensible values
+        assert settings.embedding_dimension > 0
+        assert settings.llm_cache_maxsize > 0
+        assert settings.api_port > 0

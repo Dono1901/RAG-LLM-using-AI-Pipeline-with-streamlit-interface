@@ -18,7 +18,10 @@ class TestLLMProvider:
             def generate(self, prompt: str) -> str:
                 return "answer"
 
-        assert isinstance(GoodLLM(), LLMProvider)
+        llm = GoodLLM()
+        assert isinstance(llm, LLMProvider)
+        # Verify the conforming instance actually produces output
+        assert llm.generate("test") == "answer"
 
     def test_missing_method_fails(self):
         from protocols import LLMProvider

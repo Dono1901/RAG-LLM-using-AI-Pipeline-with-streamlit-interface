@@ -58,7 +58,7 @@ class TestFinancialPDFExporter:
     ):
         result = exporter.export_full_report(sample_data, sample_results)
         assert isinstance(result, bytes)
-        assert len(result) > 0
+        assert len(result) > 500  # A real PDF with content should be at least 500 bytes
         assert result[:5] == b"%PDF-"
 
     def test_export_full_report_with_report(

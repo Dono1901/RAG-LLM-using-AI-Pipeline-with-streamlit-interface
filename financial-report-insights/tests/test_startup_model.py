@@ -362,10 +362,11 @@ class TestFullStartupAnalysis:
         )
         report = analyzer.full_startup_analysis(data)
         assert isinstance(report, StartupReport)
-        assert report.saas_metrics is not None
-        assert report.unit_economics is not None
-        assert report.burn_runway is not None
-        assert report.stage != ""
+        # Verify sub-reports contain real computed values, not just not-None
+        assert report.saas_metrics.mrr > 0
+        assert report.unit_economics.ltv_to_cac is not None
+        assert report.burn_runway.runway_months > 0
+        assert report.stage in ("pre-seed", "seed", "series-a", "series-b", "growth", "profitable")
 
     def test_full_analysis_with_funding(self, analyzer):
         data = FinancialData(
