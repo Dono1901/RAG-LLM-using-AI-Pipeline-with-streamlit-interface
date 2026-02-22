@@ -248,7 +248,7 @@ class FinancialPDFExporter:
                 fill = True  # always fill for clean look
 
             for i, cell_val in enumerate(row):
-                w = col_widths[i] if i < len(col_widths) else col_widths[-1]
+                w = col_widths[i] if i < len(col_widths) else (col_widths[-1] if col_widths else 30)
                 # Truncate long values to fit cell
                 display = str(cell_val)[:50] if len(str(cell_val)) > 50 else str(cell_val)
                 pdf.cell(w, 6, display, border=1, fill=fill)

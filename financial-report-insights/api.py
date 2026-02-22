@@ -137,10 +137,16 @@ async def security_headers_middleware(request: Request, call_next):
 async def body_size_limit_middleware(request: Request, call_next):
     """Reject request bodies exceeding the configured size limit."""
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > settings.max_request_body_bytes:
+    try:
+        if content_length and int(content_length) > settings.max_request_body_bytes:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body too large."},
+            )
+    except (ValueError, TypeError):
         return JSONResponse(
-            status_code=413,
-            content={"detail": "Request body too large."},
+            status_code=400,
+            content={"detail": "Invalid Content-Length header."},
         )
     return await call_next(request)
 
@@ -172,7 +178,7 @@ async def rate_limit_middleware(request: Request, call_next):
 @app.get("/health")
 async def health():
     """Service health check."""
-    status = get_health_status()
+    status = await asyncio.to_thread(get_health_status)
     code = 200 if status["healthy"] else 503
     if code == 503:
         raise HTTPException(status_code=503, detail=status)
@@ -192,7 +198,7 @@ async def query(req: QueryRequest):
         )
 
     try:
-        relevant_docs = rag.retrieve(req.text, top_k=req.top_k)
+        relevant_docs = await asyncio.to_thread(rag.retrieve, req.text, top_k=req.top_k)
         answer = await asyncio.to_thread(rag.answer, req.text, relevant_docs)
         sources = list({doc.get("source", "unknown") for doc in relevant_docs})
         return QueryResponse(
@@ -215,11 +221,21 @@ async def query_stream(req: QueryRequest):
             detail="LLM circuit breaker is OPEN – service temporarily unavailable.",
         )
 
-    relevant_docs = rag.retrieve(req.text, top_k=req.top_k)
+    relevant_docs = await asyncio.to_thread(rag.retrieve, req.text, top_k=req.top_k)
 
     async def event_generator():
+        """Yield SSE events without blocking the event loop.
+
+        The sync ``answer_stream`` generator performs blocking I/O per chunk,
+        so we call ``next()`` in a thread for each iteration.
+        """
+        done_sentinel = object()
+        it = iter(rag.answer_stream(req.text, relevant_docs))
         try:
-            for chunk in rag.answer_stream(req.text, relevant_docs):
+            while True:
+                chunk = await asyncio.to_thread(next, it, done_sentinel)
+                if chunk is done_sentinel:
+                    break
                 yield {"data": chunk}
             yield {"event": "done", "data": ""}
         except LLMConnectionError as exc:

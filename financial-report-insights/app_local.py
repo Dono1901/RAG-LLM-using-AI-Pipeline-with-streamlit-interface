@@ -5,6 +5,7 @@ Enhanced with Excel processing and financial analysis capabilities.
 """
 
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -272,27 +273,44 @@ class SimpleRAG:
         return hashlib.sha256(key_str.encode()).hexdigest()
 
     def _load_cached_embeddings(self, cache_key: str):
-        """Load cached embeddings from disk via joblib, or return None."""
-        cache_file = self._cache_dir / f"{cache_key}.joblib"
-        if cache_file.exists():
+        """Load cached embeddings from disk via JSON, or return None.
+
+        Also migrates legacy ``.joblib`` files to ``.json`` on first read.
+        """
+        cache_file = self._cache_dir / f"{cache_key}.json"
+        # Migrate legacy joblib files (one-time, safe to remove later)
+        legacy = self._cache_dir / f"{cache_key}.joblib"
+        if not cache_file.exists() and legacy.exists():
             try:
                 import joblib
-                data = joblib.load(cache_file)
-                logger.info(f"Loaded cached embeddings: {cache_key[:12]}...")
-                return data  # (documents_list, embeddings_list)
+                data = joblib.load(legacy)
+                # Re-save as JSON and delete unsafe pickle file
+                with open(cache_file, "w", encoding="utf-8") as fp:
+                    json.dump(data, fp)
+                legacy.unlink(missing_ok=True)
+                logger.info("Migrated joblib cache -> JSON: %s", cache_key[:12])
+                return data
             except Exception as e:
-                logger.debug(f"Cache read failed: {e}")
+                logger.debug("Legacy cache migration failed: %s", e)
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as fp:
+                    data = json.load(fp)
+                logger.info("Loaded cached embeddings: %s", cache_key[:12])
+                return data  # [documents_list, embeddings_list]
+            except Exception as e:
+                logger.debug("Cache read failed: %s", e)
         return None
 
     def _save_cached_embeddings(self, cache_key: str, documents: list, embeddings: list):
-        """Save embeddings to disk cache."""
-        cache_file = self._cache_dir / f"{cache_key}.joblib"
+        """Save embeddings to disk cache as JSON (safe, no pickle)."""
+        cache_file = self._cache_dir / f"{cache_key}.json"
         try:
-            import joblib
-            joblib.dump((documents, embeddings), cache_file)
-            logger.debug(f"Saved embeddings cache: {cache_key[:12]}...")
+            with open(cache_file, "w", encoding="utf-8") as fp:
+                json.dump([documents, embeddings], fp)
+            logger.debug("Saved embeddings cache: %s", cache_key[:12])
         except Exception as e:
-            logger.debug(f"Cache write failed: {e}")
+            logger.debug("Cache write failed: %s", e)
 
     # ------------------------------------------------------------------
     # Document loading

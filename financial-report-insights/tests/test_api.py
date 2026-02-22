@@ -413,6 +413,16 @@ class TestBodySizeLimit:
         assert resp.status_code == 413
         assert "too large" in resp.json()["detail"].lower()
 
+    def test_malformed_content_length_returns_400(self, client):
+        """Non-numeric Content-Length should return 400, not crash."""
+        resp = client.post(
+            "/analyze",
+            json={"financial_data": {"revenue": 1}},
+            headers={"Content-Length": "not-a-number"},
+        )
+        assert resp.status_code == 400
+        assert "invalid" in resp.json()["detail"].lower()
+
 
 # ---------------------------------------------------------------------------
 # Field count validator (M-02)
