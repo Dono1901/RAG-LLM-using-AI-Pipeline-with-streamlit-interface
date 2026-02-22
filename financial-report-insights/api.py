@@ -345,9 +345,11 @@ async def compare_periods(req: CompareRequest):
                 # Build deltas from graph data
                 ratio_periods: Dict[str, Dict[str, Optional[float]]] = {}
                 for row in raw_trends:
-                    rname = row["ratio_name"]
+                    rname = row.get("ratio_name", "")
+                    if not rname:
+                        continue
                     ratio_periods.setdefault(rname, {})
-                    ratio_periods[rname][row["period"]] = row.get("value")
+                    ratio_periods[rname][row.get("period", "")] = row.get("value")
 
                 for rname, periods in ratio_periods.items():
                     values = [periods.get(p) for p in req.period_labels]

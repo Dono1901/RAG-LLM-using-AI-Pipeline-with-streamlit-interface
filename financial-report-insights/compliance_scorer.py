@@ -329,7 +329,9 @@ class ComplianceScorer:
             and data.revenue is not None
             and data.revenue > 0
         ):
-            accrual_gap = abs(data.net_income - data.operating_cash_flow) / data.revenue
+            accrual_gap = safe_divide(
+                abs(data.net_income - data.operating_cash_flow), data.revenue, default=0.0
+            )
             if accrual_gap > 0.15:
                 flags.append(
                     f"Accrual gap is {accrual_gap:.1%} of revenue -- "
@@ -422,7 +424,7 @@ class ComplianceScorer:
             bs_sum = data.total_liabilities + data.total_equity
             bs_diff = abs(data.total_assets - bs_sum)
             # Allow 1% tolerance
-            if data.total_assets > 0 and bs_diff / data.total_assets < 0.01:
+            if safe_divide(bs_diff, data.total_assets, default=1.0) < 0.01:
                 consistency_passed += 1
             else:
                 red_flags.append(
@@ -439,7 +441,7 @@ class ComplianceScorer:
         ):
             expected_gp = data.revenue - data.cogs
             gp_diff = abs(data.gross_profit - expected_gp)
-            if data.revenue > 0 and gp_diff / data.revenue < 0.01:
+            if safe_divide(gp_diff, data.revenue, default=1.0) < 0.01:
                 consistency_passed += 1
             else:
                 red_flags.append(

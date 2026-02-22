@@ -470,8 +470,8 @@ class Neo4jStore:
         pairs = []
         for i in range(len(period_labels_and_ids) - 1):
             pairs.append({
-                "earlier_id": period_labels_and_ids[i]["period_id"],
-                "later_id": period_labels_and_ids[i + 1]["period_id"],
+                "earlier_id": period_labels_and_ids[i].get("period_id", ""),
+                "later_id": period_labels_and_ids[i + 1].get("period_id", ""),
             })
 
         try:
@@ -540,22 +540,25 @@ class Neo4jStore:
         enriched = []
         try:
             with self._driver.session() as session:
-                chunk_ids = [vr["chunk_id"] for vr in vector_results]
+                chunk_ids = [vr.get("chunk_id", "") for vr in vector_results if vr.get("chunk_id")]
                 result = session.run(GRAPH_CONTEXT_FOR_CHUNKS_BATCH, chunk_ids=chunk_ids)
 
                 # Build lookup from chunk_id -> graph context
                 context_map: Dict[str, Dict[str, Any]] = {}
                 for record in result:
-                    context_map[record["chunk_id"]] = {
-                        "document": record["document"],
-                        "period": record["period"],
-                        "ratios": record["ratios"],
-                        "scores": record["scores"],
+                    cid = record.get("chunk_id")
+                    if cid is None:
+                        continue
+                    context_map[cid] = {
+                        "document": record.get("document", ""),
+                        "period": record.get("period", ""),
+                        "ratios": record.get("ratios", []),
+                        "scores": record.get("scores", []),
                     }
 
                 for vr in vector_results:
                     entry = {**vr}
-                    ctx = context_map.get(vr["chunk_id"])
+                    ctx = context_map.get(vr.get("chunk_id", ""))
                     if ctx:
                         entry.update(ctx)
                     enriched.append(entry)

@@ -4310,14 +4310,17 @@ class CharlieAnalyzer:
 
         # DSO = Accounts Receivable / Revenue * 365
         dso = None
-        if ar is not None and revenue > 0:
-            dso = round(ar / revenue * 365, 1)
-            if dso > 60:
-                insights.append(f"DSO of {dso:.0f} days is high; consider tightening payment terms or improving collections.")
-            elif dso > 45:
-                insights.append(f"DSO of {dso:.0f} days is moderate; monitor for deterioration.")
-            else:
-                insights.append(f"DSO of {dso:.0f} days is healthy.")
+        if ar is not None and revenue is not None:
+            raw_dso = safe_divide(ar, revenue)
+            if raw_dso is not None:
+                dso = round(raw_dso * 365, 1)
+            if dso is not None:
+                if dso > 60:
+                    insights.append(f"DSO of {dso:.0f} days is high; consider tightening payment terms or improving collections.")
+                elif dso > 45:
+                    insights.append(f"DSO of {dso:.0f} days is moderate; monitor for deterioration.")
+                else:
+                    insights.append(f"DSO of {dso:.0f} days is healthy.")
 
         # DIO = Inventory / COGS * 365
         dio = None
@@ -5423,7 +5426,7 @@ class CharlieAnalyzer:
         if ocf is not None and data.capex is not None:
             fcf = ocf - abs(data.capex)
         if ocf is not None and data.revenue:
-            cf_ratio = ocf / data.revenue
+            cf_ratio = safe_divide(ocf, data.revenue, default=0.0)
             s = min(5.0, max(0, cf_ratio * 20))
             cf_score += s
             cf_details.append(f"OCF/Revenue: {cf_ratio:.1%}")
@@ -5708,7 +5711,7 @@ class CharlieAnalyzer:
         ni = data.net_income
         tax_rate = 0.25  # default
         if ebit and ni is not None and ebit > 1e-12:
-            implied_tax = 1.0 - (ni / ebit) if ebit > 0 else 0.25
+            implied_tax = 1.0 - safe_divide(ni, ebit, default=0.75) if ebit > 0 else 0.25
             if 0.0 <= implied_tax <= 0.60:
                 tax_rate = implied_tax
 
@@ -6978,7 +6981,7 @@ class CharlieAnalyzer:
         # --- Plowback capacity = retained earnings / NI ---
         plowback = None
         if retained_earnings is not None and ni is not None and ni > 0:
-            plowback = retained_earnings / ni
+            plowback = safe_divide(retained_earnings, ni)
 
         # --- Equity growth rate = retained earnings / equity ---
         eq_growth = safe_divide(retained_earnings, equity) if retained_earnings is not None and equity is not None and equity > 0 else None
@@ -6990,7 +6993,7 @@ class CharlieAnalyzer:
         gpb = None
         cost_of_equity = 0.10
         if sgr is not None:
-            gpb = sgr / cost_of_equity
+            gpb = safe_divide(sgr, cost_of_equity)
 
         # --- Scoring (0-10) ---
         score = 5.0
@@ -7118,7 +7121,7 @@ class CharlieAnalyzer:
         if ca is not None and cl is not None:
             nwc = ca - cl
             if revenue is not None and revenue > 0:
-                wc_intensity = nwc / revenue
+                wc_intensity = safe_divide(nwc, revenue)
 
         # --- Capex intensity ---
         capex_int = safe_divide(capex, revenue) if revenue is not None and revenue > 0 and capex > 0 else None
@@ -7801,7 +7804,7 @@ class CharlieAnalyzer:
 
         fcf_debt = None
         if ocf is not None and capex is not None and debt and debt > 0:
-            fcf_debt = (ocf - capex) / debt
+            fcf_debt = safe_divide(ocf - capex, debt)
 
         # Fixed charge coverage: approximate (no lease data, so FCCR ≈ EBIT coverage)
         fcc = ebit_cov  # Simplification when lease data unavailable
@@ -7900,10 +7903,10 @@ class CharlieAnalyzer:
         if debt is not None and equity is not None and (debt + equity) > 0:
             total_cap = debt + equity
             result.total_capital = total_cap
-            result.debt_weight = debt / total_cap
-            result.equity_weight = equity / total_cap
-            result.debt_to_total_capital = debt / total_cap
-            result.equity_to_total_capital = equity / total_cap
+            result.debt_weight = safe_divide(debt, total_cap)
+            result.equity_weight = safe_divide(equity, total_cap)
+            result.debt_to_total_capital = safe_divide(debt, total_cap)
+            result.equity_to_total_capital = safe_divide(equity, total_cap)
         else:
             # Without both debt and equity, cannot compute WACC
             result.wacc_score = 5.0
@@ -7923,7 +7926,7 @@ class CharlieAnalyzer:
         if ebit is not None and ie is not None and ni is not None:
             ebt = ebit - ie
             if ebt > 0:
-                eff_tax = 1.0 - (ni / ebt)
+                eff_tax = 1.0 - safe_divide(ni, ebt, default=0.75)
                 eff_tax = max(0.0, min(eff_tax, 0.60))  # Clamp 0-60%
         if eff_tax is None:
             eff_tax = 0.25  # Default assumption
@@ -8043,7 +8046,7 @@ class CharlieAnalyzer:
         if ebit is not None and ie is not None and ni is not None:
             ebt = ebit - ie
             if ebt > 0:
-                eff_tax = 1.0 - (ni / ebt)
+                eff_tax = 1.0 - safe_divide(ni, ebt, default=0.75)
                 eff_tax = max(0.0, min(eff_tax, 0.60))
         if eff_tax is None:
             eff_tax = 0.25
@@ -8073,7 +8076,7 @@ class CharlieAnalyzer:
 
         # EVA margin
         if data.revenue and data.revenue > 0:
-            result.eva_margin = eva / data.revenue
+            result.eva_margin = safe_divide(eva, data.revenue)
 
         # ROIC
         roic = safe_divide(nopat, invested_cap)
@@ -8165,11 +8168,11 @@ class CharlieAnalyzer:
         ta = data.total_assets
         cl = data.current_liabilities
         if ta is not None and cl is not None and (ta - cl) > 0:
-            result.fcf_yield_on_capital = fcf / (ta - cl)
+            result.fcf_yield_on_capital = safe_divide(fcf, ta - cl)
         elif data.total_debt is not None and data.total_equity is not None:
             total_cap = data.total_debt + data.total_equity
             if total_cap > 0:
-                result.fcf_yield_on_capital = fcf / total_cap
+                result.fcf_yield_on_capital = safe_divide(fcf, total_cap)
 
         # FCF yield on equity
         result.fcf_yield_on_equity = safe_divide(fcf, data.total_equity)
@@ -8179,7 +8182,7 @@ class CharlieAnalyzer:
 
         # CapEx ratios
         if ocf != 0:
-            result.capex_to_ocf = capex / ocf
+            result.capex_to_ocf = safe_divide(capex, ocf)
         result.capex_to_revenue = safe_divide(capex, data.revenue)
 
         # Scoring (base 5.0)
@@ -8254,21 +8257,21 @@ class CharlieAnalyzer:
         ar = data.accounts_receivable
         dso = None
         if ar is not None and revenue and revenue > 0:
-            dso = (ar / revenue) * 365
+            dso = safe_divide(ar, revenue, default=0.0) * 365
             result.dso = dso
 
         # --- DIO: Inventory / COGS * 365 ---
         inv = data.inventory
         dio = None
         if inv is not None and cogs and cogs > 0:
-            dio = (inv / cogs) * 365
+            dio = safe_divide(inv, cogs, default=0.0) * 365
             result.dio = dio
 
         # --- DPO: AP / COGS * 365 ---
         ap = data.accounts_payable
         dpo = None
         if ap is not None and cogs and cogs > 0:
-            dpo = (ap / cogs) * 365
+            dpo = safe_divide(ap, cogs, default=0.0) * 365
             result.dpo = dpo
 
         # --- CCC: DSO + DIO - DPO ---
@@ -8284,17 +8287,17 @@ class CharlieAnalyzer:
         # --- Cash / Revenue ---
         cash = data.cash
         if cash is not None and revenue and revenue > 0:
-            result.cash_to_revenue = cash / revenue
+            result.cash_to_revenue = safe_divide(cash, revenue)
 
         # --- OCF / Revenue ---
         ocf = data.operating_cash_flow
         if ocf is not None and revenue and revenue > 0:
-            result.ocf_to_revenue = ocf / revenue
+            result.ocf_to_revenue = safe_divide(ocf, revenue)
 
         # --- OCF / EBITDA ---
         ebitda = data.ebitda
         if ocf is not None and ebitda and ebitda > 0:
-            result.ocf_to_ebitda = ocf / ebitda
+            result.ocf_to_ebitda = safe_divide(ocf, ebitda)
 
         # --- Scoring (start at 5.0) ---
         score = 5.0
@@ -8389,8 +8392,8 @@ class CharlieAnalyzer:
         # Single-period proxy: AR/Revenue ratio vs benchmark (0.15)
         ar = data.accounts_receivable
         if ar is not None:
-            ar_ratio = ar / revenue
-            dsri = ar_ratio / 0.15 if ar_ratio > 0 else 1.0
+            ar_ratio = safe_divide(ar, revenue, default=0.0)
+            dsri = safe_divide(ar_ratio, 0.15, default=1.0) if ar_ratio > 0 else 1.0
         else:
             dsri = 1.0
         result.dsri = dsri
@@ -8398,8 +8401,8 @@ class CharlieAnalyzer:
         # --- GMI: Gross Margin Index ---
         # Single-period proxy: (1 - GM) where GM = GP/Revenue
         if gp is not None:
-            gm = gp / revenue
-            gmi = (1.0 - gm) / 0.60 if gm < 1.0 else 1.0  # benchmark 40% GM
+            gm = safe_divide(gp, revenue, default=0.0)
+            gmi = safe_divide(1.0 - gm, 0.60, default=1.0) if gm < 1.0 else 1.0
         else:
             gmi = 1.0
         result.gmi = gmi
@@ -8408,7 +8411,7 @@ class CharlieAnalyzer:
         # Proxy: (1 - (CA + PP&E)/TA); without PP&E use CA/TA
         ca = data.current_assets
         if ca is not None:
-            hard_assets_ratio = ca / ta
+            hard_assets_ratio = safe_divide(ca, ta, default=0.0)
             aqi = 1.0 + (1.0 - hard_assets_ratio) * 0.5
         else:
             aqi = 1.0
@@ -8421,8 +8424,8 @@ class CharlieAnalyzer:
 
         # --- DEPI: Depreciation Index ---
         if dep is not None and ta > 0:
-            dep_rate = dep / ta
-            depi = 0.05 / dep_rate if dep_rate > 0 else 1.0
+            dep_rate = safe_divide(dep, ta, default=0.0)
+            depi = safe_divide(0.05, dep_rate, default=1.0) if dep_rate > 0 else 1.0
         else:
             depi = 1.0
         result.depi = depi
@@ -8430,23 +8433,23 @@ class CharlieAnalyzer:
         # --- SGAI: SGA Expense Index ---
         opex = data.operating_expenses
         if opex is not None and revenue > 0:
-            sga_ratio = opex / revenue
-            sgai = sga_ratio / 0.20 if sga_ratio > 0 else 1.0
+            sga_ratio = safe_divide(opex, revenue, default=0.0)
+            sgai = safe_divide(sga_ratio, 0.20, default=1.0) if sga_ratio > 0 else 1.0
         else:
             sgai = 1.0
         result.sgai = sgai
 
         # --- LVGI: Leverage Index ---
         if tl is not None and ta > 0:
-            leverage = tl / ta
-            lvgi = leverage / 0.40 if leverage > 0 else 1.0
+            leverage = safe_divide(tl, ta, default=0.0)
+            lvgi = safe_divide(leverage, 0.40, default=1.0) if leverage > 0 else 1.0
         else:
             lvgi = 1.0
         result.lvgi = lvgi
 
         # --- TATA: Total Accruals to Total Assets ---
         if ni is not None and ocf is not None and ta > 0:
-            tata = (ni - ocf) / ta
+            tata = safe_divide(ni - ocf, ta, default=0.0)
         else:
             tata = 0.0
         result.tata = tata
@@ -10561,10 +10564,10 @@ class CharlieAnalyzer:
         result.cogs_to_revenue = cogs_ratio
 
         # SGA proxy: (OpEx - COGS) / Revenue — only if both exist
-        if data.operating_expenses is not None and data.cogs is not None and data.revenue is not None and data.revenue != 0:
+        if data.operating_expenses is not None and data.cogs is not None:
             sga = data.operating_expenses - data.cogs
             if sga >= 0:
-                result.sga_to_revenue = sga / data.revenue
+                result.sga_to_revenue = safe_divide(sga, data.revenue)
             else:
                 result.sga_to_revenue = None
         else:
@@ -12240,7 +12243,7 @@ class CharlieAnalyzer:
 
         # Efficiency: asset_turnover
         if ta > 0 and rev > 0:
-            at = rev / ta
+            at = safe_divide(rev, ta, default=0.0)
             if at >= 1.5:
                 result.efficiency_score = 10.0
             elif at >= 1.0:
@@ -12256,7 +12259,7 @@ class CharlieAnalyzer:
         ebit = data.ebit or 0
         ie = data.interest_expense or 0
         if ie > 0:
-            ic = ebit / ie
+            ic = safe_divide(ebit, ie, default=0.0)
             if ic >= 8.0:
                 result.coverage_score = 10.0
             elif ic >= 5.0:
@@ -12279,7 +12282,7 @@ class CharlieAnalyzer:
         available = [(s, w) for s, w in pillars if s is not None]
         if available:
             total_weight = sum(w for _, w in available)
-            composite = sum(s * w for s, w in available) / total_weight
+            composite = safe_divide(sum(s * w for s, w in available), total_weight, default=5.0)
             result.composite_score = round(composite, 2)
             result.fh_score = result.composite_score
 
