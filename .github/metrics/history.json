@@ -1,5 +1,42 @@
 {
   "schema_version": 1,
   "description": "Rolling 90-day metrics history for CI/CD learning system",
-  "entries": []
+  "entries": [
+    {
+      "timestamp": "2026-02-22T10:18:31.093005+00:00",
+      "commit_sha": "adb48e1338e108753a30948f7142cb341b2096eb",
+      "branch": "main",
+      "coverage_pct": 81.45,
+      "test_count": 3146,
+      "test_file_count": 143,
+      "module_loc": {
+        "api.py": 720,
+        "app_local.py": 1004,
+        "compliance_scorer.py": 726,
+        "config.py": 76,
+        "excel_processor.py": 834,
+        "export_pdf.py": 448,
+        "export_utils.py": 90,
+        "export_xlsx.py": 558,
+        "financial_analyzer.py": 13828,
+        "graph_retriever.py": 230,
+        "graph_schema.py": 454,
+        "graph_store.py": 738,
+        "healthcheck.py": 145,
+        "insights_page.py": 7975,
+        "local_llm.py": 445,
+        "logging_config.py": 79,
+        "portfolio_analyzer.py": 524,
+        "protocols.py": 22,
+        "ratio_framework.py": 631,
+        "startup_model.py": 398,
+        "streamlit_app_local.py": 438,
+        "underwriting.py": 527,
+        "viz_utils.py": 739
+      },
+      "total_loc": 31629,
+      "dependency_count": 22,
+      "build_duration_seconds": null
+    }
+  ]
 }
