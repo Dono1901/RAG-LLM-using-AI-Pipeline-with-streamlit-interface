@@ -382,7 +382,7 @@ RATIO_CATALOG: Dict[str, RatioDefinition] = {
             (0.75, 4.0),   # Weak: 0.75-1.0
         ],
         adjustments=[
-            Adjustment("cash_and_equivalents", Operator.GT, 0.3, 0.5, "Strong cash position"),
+            Adjustment("cash", Operator.GT, 0.3, 0.5, "Strong cash position"),
         ],
         unit="x"
     ),
@@ -405,7 +405,7 @@ RATIO_CATALOG: Dict[str, RatioDefinition] = {
     "cash_ratio": RatioDefinition(
         name="Cash Ratio",
         description="Most conservative liquidity measure",
-        numerator_field="cash_and_equivalents",
+        numerator_field="cash",
         denominator_field="current_liabilities",
         higher_is_better=True,
         scoring_thresholds=[
