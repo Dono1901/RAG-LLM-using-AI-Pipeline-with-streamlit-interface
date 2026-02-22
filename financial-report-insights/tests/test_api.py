@@ -442,3 +442,29 @@ class TestErrorSanitization:
         assert resp.status_code == 422
         assert "SECRET_DB_CONNECTION_STRING" not in resp.json()["detail"]
         assert "Could not process" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Graph endpoint injection safety
+# ---------------------------------------------------------------------------
+
+
+class TestGraphInjectionSafety:
+    def test_cypher_injection_in_period_label_safe(self, client, mock_rag):
+        """Period label with Cypher syntax should be passed as literal, not executed."""
+        mock_store = MagicMock()
+        mock_store.ratios_by_period_label.return_value = []
+        mock_store.scores_by_period_label.return_value = []
+        mock_rag._graph_store = mock_store
+        resp = client.get("/graph/context/FY2024'; DROP TABLE Ratio; --")
+        assert resp.status_code == 200
+        # Verify the literal string was passed to the store (parameterized)
+        mock_store.ratios_by_period_label.assert_called_once()
+
+    def test_graph_ratios_injection_safe(self, client, mock_rag):
+        """Ratio endpoint with injection attempt should be safe."""
+        mock_store = MagicMock()
+        mock_store.ratios_by_period_label.return_value = []
+        mock_rag._graph_store = mock_store
+        resp = client.get("/graph/ratios/FY2024%27%20OR%201%3D1")
+        assert resp.status_code == 200

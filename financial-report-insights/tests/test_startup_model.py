@@ -442,3 +442,49 @@ class TestFullStartupAnalysis:
         report = analyzer.full_startup_analysis(FinancialData())
         assert isinstance(report, StartupReport)
         assert report.stage == "pre-seed"
+
+
+# ---------------------------------------------------------------------------
+# Zero-customer and breakeven edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestStartupEdgeCases:
+    @pytest.fixture()
+    def analyzer(self):
+        return StartupAnalyzer()
+
+    def test_saas_metrics_zero_customers_no_crash(self, analyzer):
+        """ARPU with zero customers should return None, not ZeroDivisionError."""
+        data = FinancialData(monthly_recurring_revenue=50_000, customer_count=0)
+        metrics = analyzer.saas_metrics(data)
+        assert metrics.arpu is None
+        assert metrics.mrr == 50_000
+
+    def test_saas_metrics_none_customers_no_crash(self, analyzer):
+        """ARPU with None customers should return None gracefully."""
+        data = FinancialData(monthly_recurring_revenue=50_000, customer_count=None)
+        metrics = analyzer.saas_metrics(data)
+        assert metrics.arpu is None
+
+    def test_burn_runway_exact_breakeven(self, analyzer):
+        """When net_burn=0 (exact breakeven), runway should be None not infinity."""
+        data = FinancialData(
+            cash=1_000_000,
+            monthly_burn_rate=150_000,
+            monthly_recurring_revenue=150_000,
+        )
+        br = analyzer.burn_runway(data)
+        assert br.is_cash_flow_positive is True
+        assert br.runway_months is None  # Not float('inf')
+
+    def test_unit_economics_zero_churn(self, analyzer):
+        """Zero churn should not cause division errors in LTV calculation."""
+        data = FinancialData(
+            monthly_recurring_revenue=100_000,
+            customer_count=100,
+            churned_customers=0,
+        )
+        ue = analyzer.unit_economics(data)
+        # Zero churn -> infinite LTV or capped value, not crash
+        assert ue.ltv is None or ue.ltv > 0

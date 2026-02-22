@@ -445,3 +445,54 @@ class TestScoreToGradeBoundary:
 
     def test_score_34_is_F(self):
         assert _score_to_grade(34) == "F"
+
+
+# ---------------------------------------------------------------------------
+# HHI and portfolio edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestHHIEdgeCases:
+    def test_hhi_all_zero_revenues(self):
+        """All-zero revenues should return 1.0 (fully concentrated)."""
+        assert _hhi([0, 0, 0, 0]) == 1.0
+
+    def test_hhi_all_none_values(self):
+        """All-None values should return 1.0."""
+        assert _hhi([None, None, None]) == 1.0
+
+    def test_hhi_single_nonzero(self):
+        """Single nonzero among zeros should return 1.0."""
+        assert _hhi([0, 100, 0, 0]) == 1.0
+
+    def test_hhi_negative_values_use_abs(self):
+        """Negative values should be treated as absolute values."""
+        result = _hhi([-100, 100])
+        assert result == pytest.approx(0.5)  # Equal shares
+
+
+class TestPortfolioEdgeCases:
+    @pytest.fixture()
+    def analyzer(self):
+        return PortfolioAnalyzer()
+
+    def test_portfolio_all_zero_revenue_companies(self, analyzer):
+        """Portfolio with all-zero-revenue companies should not crash."""
+        companies = {
+            f"Co{i}": FinancialData(revenue=0, total_assets=1000 * (i + 1))
+            for i in range(3)
+        }
+        report = analyzer.full_portfolio_analysis(companies)
+        assert isinstance(report, PortfolioReport)
+        assert not math.isnan(report.diversification.overall_score)
+
+    def test_portfolio_identical_companies(self, analyzer):
+        """All-identical companies should compute without NaN."""
+        data = FinancialData(
+            revenue=1_000_000, net_income=100_000,
+            total_assets=5_000_000, current_assets=2_000_000,
+            current_liabilities=1_000_000, total_equity=3_000_000,
+        )
+        companies = {f"Co{i}": data for i in range(5)}
+        report = analyzer.full_portfolio_analysis(companies)
+        assert not math.isnan(report.correlation.avg_correlation)
