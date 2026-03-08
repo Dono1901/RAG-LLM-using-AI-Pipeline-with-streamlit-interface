@@ -73,6 +73,42 @@
       "total_loc": 31654,
       "dependency_count": 22,
       "build_duration_seconds": null
+    },
+    {
+      "timestamp": "2026-03-08T10:19:08.861349+00:00",
+      "commit_sha": "6d65a566c1b3894a0204b8994729ef197f4094d8",
+      "branch": "main",
+      "coverage_pct": 83.2,
+      "test_count": 3492,
+      "test_file_count": 150,
+      "module_loc": {
+        "api.py": 735,
+        "app_local.py": 1004,
+        "compliance_scorer.py": 728,
+        "config.py": 76,
+        "excel_processor.py": 834,
+        "export_pdf.py": 448,
+        "export_utils.py": 90,
+        "export_xlsx.py": 558,
+        "financial_analyzer.py": 13832,
+        "graph_retriever.py": 230,
+        "graph_schema.py": 454,
+        "graph_store.py": 741,
+        "healthcheck.py": 145,
+        "insights_page.py": 7976,
+        "local_llm.py": 444,
+        "logging_config.py": 79,
+        "portfolio_analyzer.py": 527,
+        "protocols.py": 22,
+        "ratio_framework.py": 631,
+        "startup_model.py": 398,
+        "streamlit_app_local.py": 438,
+        "underwriting.py": 526,
+        "viz_utils.py": 738
+      },
+      "total_loc": 31654,
+      "dependency_count": 22,
+      "build_duration_seconds": null
     }
   ]
 }
