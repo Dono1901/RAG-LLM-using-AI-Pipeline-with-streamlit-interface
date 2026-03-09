@@ -10,6 +10,8 @@ Extends standard RAG retrieval with graph traversal capabilities:
 import logging
 from typing import Any, Dict, List, Optional
 
+from structured_types import GraphChunk, GraphFinancialContext, GraphRetrievalResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ def graph_enhanced_search(
     query_embedding: List[float],
     top_k: int = 5,
     model_name: str = "mxbai-embed-large",
-) -> Dict[str, Any]:
+) -> GraphRetrievalResult:
     """Perform vector search with graph-traversal enrichment.
 
     Returns both text chunks and structured financial data connected
@@ -31,7 +33,7 @@ def graph_enhanced_search(
         model_name: Embedding model name (for index lookup).
 
     Returns:
-        Dict with 'chunks' (text results) and 'financial_context' (structured data).
+        GraphRetrievalResult with typed chunks and financial_context.
     """
     results = store.graph_search(query_embedding, top_k, model_name)
 
@@ -39,34 +41,31 @@ def graph_enhanced_search(
     financial_context = []
 
     for r in results:
-        chunks.append({
-            "source": r.get("source", ""),
-            "content": r.get("content", ""),
-            "score": r.get("score", 0.0),
-        })
+        chunks.append(GraphChunk(
+            source=r.get("source", ""),
+            content=r.get("content", ""),
+            score=r.get("score", 0.0),
+        ))
 
         # Collect connected financial data
         ratios = r.get("ratios", [])
         scores = r.get("scores", [])
         if ratios or scores:
-            financial_context.append({
-                "document": r.get("document", ""),
-                "period": r.get("period", ""),
-                "ratios": [rt for rt in ratios if rt.get("name")],
-                "scores": [sc for sc in scores if sc.get("model")],
-            })
+            financial_context.append(GraphFinancialContext(
+                document=r.get("document", ""),
+                period=r.get("period", ""),
+                ratios=[rt for rt in ratios if rt.get("name")],
+                scores=[sc for sc in scores if sc.get("model")],
+            ))
 
-    return {
-        "chunks": chunks,
-        "financial_context": financial_context,
-    }
+    return GraphRetrievalResult(chunks=chunks, financial_context=financial_context)
 
 
-def format_graph_context(financial_context: List[Dict[str, Any]]) -> str:
+def format_graph_context(financial_context: list) -> str:
     """Format graph-retrieved financial context as text for LLM prompts.
 
     Args:
-        financial_context: List of dicts from graph_enhanced_search.
+        financial_context: List of GraphFinancialContext or dicts.
 
     Returns:
         Formatted string ready for prompt injection.
@@ -76,19 +75,26 @@ def format_graph_context(financial_context: List[Dict[str, Any]]) -> str:
 
     parts = []
     for ctx in financial_context:
-        doc = ctx.get("document", "Unknown")
-        period = ctx.get("period", "Unknown")
+        if isinstance(ctx, dict):
+            doc = ctx.get("document", "Unknown")
+            period = ctx.get("period", "Unknown")
+        else:
+            doc = ctx.document or "Unknown"
+            period = ctx.period or "Unknown"
         header = f"[{doc} / {period}]"
 
+        ratios = ctx.get("ratios", []) if isinstance(ctx, dict) else ctx.ratios
+        scores = ctx.get("scores", []) if isinstance(ctx, dict) else ctx.scores
+
         ratio_lines = []
-        for r in ctx.get("ratios", []):
+        for r in ratios:
             name = r.get("name", "")
             value = r.get("value", "N/A")
             category = r.get("category", "")
             ratio_lines.append(f"  - {name}: {value} ({category})")
 
         score_lines = []
-        for s in ctx.get("scores", []):
+        for s in scores:
             model = s.get("model", "")
             value = s.get("value", "N/A")
             grade = s.get("grade", "")

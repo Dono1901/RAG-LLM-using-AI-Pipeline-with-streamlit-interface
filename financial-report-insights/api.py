@@ -55,6 +55,19 @@ class AnalyzeRequest(BaseModel):
         return v
 
 
+class AnalyzeResponse(BaseModel):
+    """Typed response for /analyze endpoint."""
+    executive_summary: str
+    sections: Dict[str, str]
+    generated_at: str
+    liquidity_ratios: Optional[Dict[str, Optional[float]]] = None
+    profitability_ratios: Optional[Dict[str, Optional[float]]] = None
+    leverage_ratios: Optional[Dict[str, Optional[float]]] = None
+    efficiency_ratios: Optional[Dict[str, Optional[float]]] = None
+    composite_health_score: Optional[float] = None
+    composite_health_grade: Optional[str] = None
+
+
 class DocumentInfo(BaseModel):
     source: str
     type: str
@@ -244,7 +257,7 @@ async def query_stream(req: QueryRequest):
     return EventSourceResponse(event_generator())
 
 
-@app.post("/analyze")
+@app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
     """Run CharlieAnalyzer on provided financial data."""
     rag = _get_rag()
@@ -254,13 +267,40 @@ async def analyze(req: AnalyzeRequest):
 
     try:
         data = _parse_financial_data(req.financial_data)
-
+        analysis = await asyncio.to_thread(rag.charlie_analyzer.analyze, data)
         report = await asyncio.to_thread(rag.charlie_analyzer.generate_report, data)
-        return {
-            "executive_summary": report.executive_summary,
-            "sections": report.sections,
-            "generated_at": report.generated_at,
-        }
+
+        # Extract ratio data — handle both AnalysisResults and legacy dict
+        def _to_ratio_dict(obj):
+            if isinstance(obj, dict):
+                return obj or None
+            if obj is not None and hasattr(obj, 'to_dict') and callable(obj.to_dict):
+                try:
+                    d = obj.to_dict()
+                    return d if isinstance(d, dict) else None
+                except Exception:
+                    return None
+            return None
+
+        liq = _to_ratio_dict(analysis.get('liquidity_ratios'))
+        prof = _to_ratio_dict(analysis.get('profitability_ratios'))
+        lev = _to_ratio_dict(analysis.get('leverage_ratios'))
+        eff = _to_ratio_dict(analysis.get('efficiency_ratios'))
+        health = analysis.get('composite_health')
+        h_score = getattr(health, 'overall_score', None)
+        h_grade = getattr(health, 'grade', None)
+
+        return AnalyzeResponse(
+            executive_summary=report.executive_summary,
+            sections=report.sections,
+            generated_at=report.generated_at,
+            liquidity_ratios=liq,
+            profitability_ratios=prof,
+            leverage_ratios=lev,
+            efficiency_ratios=eff,
+            composite_health_score=h_score if isinstance(h_score, (int, float)) else None,
+            composite_health_grade=h_grade if isinstance(h_grade, str) else None,
+        )
     except Exception as exc:
         logger.warning("Analyze request failed: %s", type(exc).__name__)
         raise HTTPException(
@@ -274,10 +314,24 @@ async def analyze(req: AnalyzeRequest):
 # ---------------------------------------------------------------------------
 
 
+class RatioData(BaseModel):
+    """A single ratio from the graph store."""
+    name: str
+    value: Optional[float] = None
+    category: str = ""
+
+
+class ScoreData(BaseModel):
+    """A single scoring model result from the graph store."""
+    model: str
+    value: Optional[float] = None
+    grade: str = ""
+
+
 class PeriodContext(BaseModel):
     period_label: str
-    ratios: List[Dict[str, Any]]
-    scores: List[Dict[str, Any]]
+    ratios: List[RatioData]
+    scores: List[ScoreData]
 
 
 class RatioEntry(BaseModel):
@@ -299,9 +353,13 @@ def _require_graph_store():
 async def graph_context(period_label: str = Path(..., max_length=100)):
     """Return all ratios and scores for a fiscal period."""
     store = _require_graph_store()
-    ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
-    scores = await asyncio.to_thread(store.scores_by_period_label, period_label)
-    return PeriodContext(period_label=period_label, ratios=ratios, scores=scores)
+    raw_ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
+    raw_scores = await asyncio.to_thread(store.scores_by_period_label, period_label)
+    return PeriodContext(
+        period_label=period_label,
+        ratios=[RatioData(name=r.get("name", ""), value=r.get("value"), category=r.get("category", "")) for r in raw_ratios],
+        scores=[ScoreData(model=s.get("model", ""), value=s.get("value"), grade=s.get("grade", "")) for s in raw_scores],
+    )
 
 
 @app.get("/graph/ratios/{period_label}", response_model=List[RatioEntry])
@@ -329,12 +387,19 @@ class PeriodDelta(BaseModel):
     delta: Optional[float] = None
 
 
+class TrendDataPoint(BaseModel):
+    """A single ratio value at a specific period."""
+    ratio_name: str
+    period: str
+    value: Optional[float] = None
+
+
 class CompareResponse(BaseModel):
     periods_compared: List[str]
     improvements: List[str]
     deteriorations: List[str]
     deltas: List[PeriodDelta]
-    graph_trend_data: Optional[List[Dict[str, Any]]] = None
+    graph_trend_data: Optional[List[TrendDataPoint]] = None
     summary: str
 
 
@@ -356,7 +421,14 @@ async def compare_periods(req: CompareRequest):
                 store.cross_period_ratio_trend, req.period_labels
             )
             if raw_trends:
-                graph_trend_data = raw_trends
+                graph_trend_data = [
+                    TrendDataPoint(
+                        ratio_name=row.get("ratio_name", ""),
+                        period=row.get("period", ""),
+                        value=row.get("value"),
+                    )
+                    for row in raw_trends
+                ]
                 # Build deltas from graph data
                 ratio_periods: Dict[str, Dict[str, Optional[float]]] = {}
                 for row in raw_trends:

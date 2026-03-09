@@ -15,6 +15,14 @@ import re
 import pandas as pd
 import numpy as np
 
+from structured_types import (
+    AnalysisResults,
+    EfficiencyRatios,
+    LeverageRatios,
+    LiquidityRatios,
+    ProfitabilityRatios,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -13734,30 +13742,36 @@ class CharlieAnalyzer:
 
         return result
 
-    def analyze(self, data: Union[FinancialData, pd.DataFrame]) -> Dict[str, Any]:
+    def analyze(self, data: Union[FinancialData, pd.DataFrame]) -> AnalysisResults:
         """
         Run comprehensive analysis on financial data.
+        Returns an AnalysisResults that supports dict-style access for backward compat.
         """
         if isinstance(data, pd.DataFrame):
             financial_data = self._dataframe_to_financial_data(data)
         else:
             financial_data = data
 
-        results = {
-            'liquidity_ratios': self.calculate_liquidity_ratios(financial_data),
-            'profitability_ratios': self.calculate_profitability_ratios(financial_data),
-            'leverage_ratios': self.calculate_leverage_ratios(financial_data),
-            'efficiency_ratios': self.calculate_efficiency_ratios(financial_data),
-            'cash_flow': self.analyze_cash_flow(financial_data),
-            'working_capital': self.analyze_working_capital(financial_data),
-            'dupont': self.dupont_analysis(financial_data),
-            'altman_z_score': self.altman_z_score(financial_data),
-            'piotroski_f_score': self.piotroski_f_score(financial_data),
-            'composite_health': self.composite_health_score(financial_data),
-        }
+        liq = self.calculate_liquidity_ratios(financial_data)
+        prof = self.calculate_profitability_ratios(financial_data)
+        lev = self.calculate_leverage_ratios(financial_data)
+        eff = self.calculate_efficiency_ratios(financial_data)
 
-        # Generate insights
-        results['insights'] = self.generate_insights(results)
+        results = AnalysisResults(
+            liquidity_ratios=LiquidityRatios.from_dict(liq),
+            profitability_ratios=ProfitabilityRatios.from_dict(prof),
+            leverage_ratios=LeverageRatios.from_dict(lev),
+            efficiency_ratios=EfficiencyRatios.from_dict(eff),
+            cash_flow=self.analyze_cash_flow(financial_data),
+            working_capital=self.analyze_working_capital(financial_data),
+            dupont=self.dupont_analysis(financial_data),
+            altman_z_score=self.altman_z_score(financial_data),
+            piotroski_f_score=self.piotroski_f_score(financial_data),
+            composite_health=self.composite_health_score(financial_data),
+        )
+
+        # Generate insights — pass dict format for backward compat with generate_insights
+        results.insights = self.generate_insights(results.to_dict())
 
         return results
 
@@ -13872,7 +13886,7 @@ class CharlieAnalyzer:
 
 
 # Convenience function for quick analysis
-def quick_analyze(df: pd.DataFrame) -> Dict[str, Any]:
+def quick_analyze(df: pd.DataFrame) -> AnalysisResults:
     """
     Quick financial analysis of a DataFrame.
     """

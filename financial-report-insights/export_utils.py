@@ -6,6 +6,8 @@ and common scoring functions used across multiple modules.
 
 from typing import Dict, List, Tuple
 
+from structured_types import RatioCategory
+
 
 # ---------------------------------------------------------------------------
 # Common scoring helpers
@@ -58,33 +60,33 @@ def _is_dollar_key(key: str) -> bool:
 # Ratio category grouping
 # ---------------------------------------------------------------------------
 
-_CATEGORY_MAP: Dict[str, str] = {
+_CATEGORY_MAP: Dict[str, RatioCategory] = {
     # Liquidity
-    "current_ratio": "Liquidity",
-    "quick_ratio": "Liquidity",
-    "cash_ratio": "Liquidity",
-    "working_capital": "Liquidity",
+    "current_ratio": RatioCategory.LIQUIDITY,
+    "quick_ratio": RatioCategory.LIQUIDITY,
+    "cash_ratio": RatioCategory.LIQUIDITY,
+    "working_capital": RatioCategory.LIQUIDITY,
     # Profitability
-    "gross_margin": "Profitability",
-    "operating_margin": "Profitability",
-    "net_margin": "Profitability",
-    "roe": "Profitability",
-    "roa": "Profitability",
-    "roic": "Profitability",
+    "gross_margin": RatioCategory.PROFITABILITY,
+    "operating_margin": RatioCategory.PROFITABILITY,
+    "net_margin": RatioCategory.PROFITABILITY,
+    "roe": RatioCategory.PROFITABILITY,
+    "roa": RatioCategory.PROFITABILITY,
+    "roic": RatioCategory.PROFITABILITY,
     # Leverage
-    "debt_to_equity": "Leverage",
-    "debt_to_assets": "Leverage",
-    "debt_ratio": "Leverage",
-    "equity_multiplier": "Leverage",
-    "interest_coverage": "Leverage",
+    "debt_to_equity": RatioCategory.LEVERAGE,
+    "debt_to_assets": RatioCategory.LEVERAGE,
+    "debt_ratio": RatioCategory.LEVERAGE,
+    "equity_multiplier": RatioCategory.LEVERAGE,
+    "interest_coverage": RatioCategory.LEVERAGE,
     # Efficiency
-    "asset_turnover": "Efficiency",
-    "inventory_turnover": "Efficiency",
-    "receivables_turnover": "Efficiency",
-    "payables_turnover": "Efficiency",
+    "asset_turnover": RatioCategory.EFFICIENCY,
+    "inventory_turnover": RatioCategory.EFFICIENCY,
+    "receivables_turnover": RatioCategory.EFFICIENCY,
+    "payables_turnover": RatioCategory.EFFICIENCY,
 }
 
 
 def _categorize(key: str) -> str:
     """Return the category for a ratio key, falling back to 'Other'."""
-    return _CATEGORY_MAP.get(key, "Other")
+    return _CATEGORY_MAP.get(key, RatioCategory.OTHER).value
