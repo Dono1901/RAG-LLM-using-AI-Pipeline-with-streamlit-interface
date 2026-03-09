@@ -1,0 +1,105 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+defaults:
+  run:
+    working-directory: financial-report-insights
+
+env:
+  PYTHON_VERSION: "3.12"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # Fast feedback: lint + test in parallel
+  # ──────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
+      - run: pip install ruff
+      - run: ruff check . --output-format=github
+      - run: ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ \
+            -q --tb=short \
+            --cov=. --cov-report=xml:coverage.xml \
+            --junitxml=test-results.xml
+
+      - name: Test count validation
+        run: |
+          PASS_COUNT=$(python -m pytest tests/ --co -q 2>/dev/null | tail -1 | grep -oP '\d+')
+          echo "Collected $PASS_COUNT tests"
+          if [ "$PASS_COUNT" -lt 3500 ]; then
+            echo "::warning::Test count ($PASS_COUNT) dropped below 3500 — possible test deletion"
+          fi
+
+  # ──────────────────────────────────────────────────────────────
+  # LOC guardrails (prevent file bloat)
+  # ──────────────────────────────────────────────────────────────
+  guardrails:
+    name: Guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check file sizes
+        run: |
+          check_loc() {
+            local file=$1 limit=$2
+            if [ -f "$file" ]; then
+              LOC=$(wc -l < "$file")
+              echo "$file: $LOC LOC (limit: $limit)"
+              if [ "$LOC" -gt "$limit" ]; then
+                echo "::error::$file exceeds $limit LOC guardrail ($LOC)"
+                return 1
+              fi
+            fi
+          }
+          FAIL=0
+          check_loc financial_analyzer.py 15000 || FAIL=1
+          check_loc insights_page.py 10000 || FAIL=1
+          exit $FAIL
+
+      - name: Check for secrets in diff
+        run: |
+          # Simple pattern check for common secret patterns
+          if git diff origin/main...HEAD -- . | grep -iP '(password|secret|api_key|token)\s*=\s*["\x27][^"\x27]{8,}' | grep -v '\.example\|test\|mock\|fake'; then
+            echo "::error::Possible secrets detected in diff"
+            exit 1
+          fi
+          echo "No secrets detected"

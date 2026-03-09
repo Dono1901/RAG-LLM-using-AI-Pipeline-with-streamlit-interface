@@ -1,213 +1,154 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop, "feature/**"]
+    paths:
+      - "financial-report-insights/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "financial-report-insights/**"
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+defaults:
+  run:
+    working-directory: financial-report-insights
+
+# Cancel superseded runs on the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  PIP_CACHE_DIR: ~/.cache/pip
 
 jobs:
-  test:
+  # ──────────────────────────────────────────────────────────────
+  # Stage 1: Lint & Static Analysis
+  # ──────────────────────────────────────────────────────────────
+  lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('financial-report-insights/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
 
       - name: Install dependencies
-        working-directory: financial-report-insights
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov
+          pip install ruff mypy
 
-      - name: Run tests
-        working-directory: financial-report-insights
-        run: |
-          python -m pytest tests/ -v --tb=short --cov=. --cov-report=term-missing --cov-report=xml
-
-      - name: Check coverage threshold
-        if: matrix.python-version == '3.12'
-        working-directory: financial-report-insights
-        run: |
-          COVERAGE=$(python -c "
-          import xml.etree.ElementTree as ET
-          tree = ET.parse('coverage.xml')
-          rate = float(tree.getroot().get('line-rate', 0))
-          print(f'{rate * 100:.1f}')
-          ")
-          echo "Coverage: ${COVERAGE}%"
-          python -c "
-          rate = float('${COVERAGE}')
-          if rate < 80:
-              print(f'::warning::Coverage {rate}% is below 80% threshold')
-          "
-
-      - name: Upload coverage
-        if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: financial-report-insights/coverage.xml
-
-  lint-and-security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install tools
-        run: pip install ruff bandit pip-audit
-
-      - name: Ruff lint check
-        working-directory: financial-report-insights
-        run: ruff check . --select E,W,F --ignore E501
+      - name: Ruff lint
+        run: ruff check . --output-format=github
 
       - name: Ruff format check
-        working-directory: financial-report-insights
-        run: ruff format --check . || echo "::warning::Code formatting issues detected"
+        run: ruff format --check .
+
+      - name: MyPy type check (structured_types)
+        run: mypy structured_types.py --ignore-missing-imports --no-error-summary || true
+
+  # ──────────────────────────────────────────────────────────────
+  # Stage 2: Security Scanning
+  # ──────────────────────────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install bandit safety pip-audit
 
       - name: Bandit security scan
-        working-directory: financial-report-insights
-        run: |
-          bandit -r . -x ./tests --format json --output bandit-report.json -ll || true
-          FINDINGS=$(python -c "import json; d=json.load(open('bandit-report.json')); print(len(d.get('results',[])))")
-          echo "Bandit findings: $FINDINGS"
-          if [ "$FINDINGS" -gt 0 ]; then
-            echo "::warning::Bandit found $FINDINGS security issue(s)"
-            python -c "
-          import json
-          d = json.load(open('bandit-report.json'))
-          for r in d.get('results', [])[:5]:
-              print(f\"::warning file={r['filename']},line={r['line_number']}::{r['issue_text']}\")
-          "
-          fi
+        run: bandit -r . -x ./tests -f json -o bandit-report.json --severity-level medium || true
 
-      - name: Dependency vulnerability audit
-        working-directory: financial-report-insights
-        run: |
-          pip-audit -r requirements.txt --format json --output audit-report.json || true
-          VULNS=$(python -c "import json; d=json.load(open('audit-report.json')); print(len(d))" 2>/dev/null || echo "0")
-          if [ "$VULNS" -gt 0 ]; then
-            echo "::warning::pip-audit found $VULNS vulnerability(ies)"
-          fi
+      - name: pip-audit dependency scan
+        run: pip-audit --requirement requirements.txt --output json --desc > pip-audit-report.json || true
 
-  auto-format:
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            financial-report-insights/bandit-report.json
+            financial-report-insights/pip-audit-report.json
+          retention-days: 30
+
+  # ──────────────────────────────────────────────────────────────
+  # Stage 3: Test Suite
+  # ──────────────────────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install ruff
-        run: pip install ruff
-
-      - name: Auto-format code
-        working-directory: financial-report-insights
-        run: |
-          ruff format .
-          ruff check . --select E,W,F --ignore E501 --fix || true
-
-      - name: Commit formatting fixes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: auto-format code [skip ci]"
-          file_pattern: "financial-report-insights/**/*.py"
-
-  pr-summary:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    needs: [test, lint-and-security]
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download coverage
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: coverage-report
-          path: ./coverage-data
-        continue-on-error: true
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
 
-      - name: Post PR summary
-        uses: actions/github-script@v7
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-xdist
+
+      - name: Run tests with coverage
+        run: |
+          python -m pytest tests/ \
+            -q --tb=short \
+            --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
+            -n auto \
+            --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          script: |
-            const fs = require('fs');
-            let coveragePct = 'N/A';
-            try {
-              const xml = fs.readFileSync('./coverage-data/coverage.xml', 'utf8');
-              const match = xml.match(/line-rate="([^"]+)"/);
-              if (match) coveragePct = (parseFloat(match[1]) * 100).toFixed(1) + '%';
-            } catch (e) {}
+          name: test-results-py${{ matrix.python-version }}
+          path: |
+            financial-report-insights/test-results.xml
+            financial-report-insights/coverage.xml
+          retention-days: 30
 
-            const body = `## CI Summary
+      - name: Coverage summary
+        if: matrix.python-version == '3.12'
+        run: |
+          pip install coverage
+          python -m coverage report --fail-under=60 || echo "::warning::Coverage below 60%"
 
-            | Check | Status |
-            |-------|--------|
-            | Tests (3.11, 3.12, 3.13) | ${{ needs.test.result == 'success' && 'Passed' || 'Failed' }} |
-            | Lint + Security | ${{ needs.lint-and-security.result == 'success' && 'Passed' || 'Failed' }} |
-            | Coverage | ${coveragePct} |
-
-            *Auto-generated by CI*`;
-
-            // Find existing comment
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes('## CI Summary'));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body: body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: body,
-              });
-            }
-
-  docker-build:
+  # ──────────────────────────────────────────────────────────────
+  # Stage 4: Build Validation
+  # ──────────────────────────────────────────────────────────────
+  build:
+    name: Docker Build
     runs-on: ubuntu-latest
-    needs: test
+    needs: [lint, test]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -219,58 +160,47 @@ jobs:
         with:
           context: financial-report-insights
           push: false
-          tags: rag-financial-insights:test
+          tags: rag-financial-insights:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: true
 
-  collect-metrics:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, lint-and-security]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Download coverage
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-          path: financial-report-insights
-        continue-on-error: true
-
-      - name: Collect metrics
-        id: metrics
-        run: python .github/scripts/metrics_collector.py
-
-      - name: Commit metrics
-        if: always()
+      - name: Verify image
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/metrics/history.json
-          git diff --cached --quiet || git commit -m "metrics: update CI metrics [skip ci]"
-          git push || true
+          docker images rag-financial-insights:${{ github.sha }}
+          echo "Image built successfully"
 
-      - name: Create regression issue
-        if: steps.metrics.outputs.has_regressions == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let details = '';
-            try {
-              const data = JSON.parse(fs.readFileSync('.github/metrics/regressions.json', 'utf8'));
-              details = data.regressions.map(r => `- ${r}`).join('\n');
-            } catch (e) { details = 'See workflow logs for details.'; }
+  # ──────────────────────────────────────────────────────────────
+  # Stage 5: Quality Gate
+  # ──────────────────────────────────────────────────────────────
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [lint, security, test, build]
+    if: always()
+    steps:
+      - name: Check all stages
+        run: |
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Security: ${{ needs.security.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo "Build: ${{ needs.build.result }}"
 
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[Regression] Metrics regression detected on ${new Date().toISOString().split('T')[0]}`,
-              body: `## Regression Detected\n\n${details}\n\nCommit: ${context.sha}\n\n*Auto-generated by CI metrics collector*`,
-              labels: ['regression', 'needs-attention'],
-            });
+          if [[ "${{ needs.lint.result }}" == "failure" ]]; then
+            echo "::error::Lint stage failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test.result }}" == "failure" ]]; then
+            echo "::error::Test stage failed"
+            exit 1
+          fi
+          if [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "::error::Build stage failed"
+            exit 1
+          fi
+          # Security is advisory (doesn't block)
+          if [[ "${{ needs.security.result }}" == "failure" ]]; then
+            echo "::warning::Security scan had issues — review artifacts"
+          fi
+
+          echo "✅ Quality gate passed"

@@ -1,0 +1,28 @@
+# Ruff linter configuration
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "S101",   # assert usage (needed in tests)
+    "S311",   # random (not used for crypto)
+    "B008",   # function call in default arg (FastAPI Depends pattern)
+    "B905",   # zip without strict (pandas compat)
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S", "B"]  # security + bugbear relaxed in tests
+
+[format]
+quote-style = "double"
+indent-style = "space"

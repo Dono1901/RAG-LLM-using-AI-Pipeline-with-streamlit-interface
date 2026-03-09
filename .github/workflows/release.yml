@@ -1,0 +1,136 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+defaults:
+  run:
+    working-directory: financial-report-insights
+
+env:
+  PYTHON_VERSION: "3.12"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/rag-financial-insights
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # Gate: Full test suite must pass before any release
+  # ──────────────────────────────────────────────────────────────
+  validate:
+    name: Release Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: financial-report-insights/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Full test suite
+        run: python -m pytest tests/ -q --tb=short
+
+      - name: LOC guardrail check
+        run: |
+          FA_LOC=$(wc -l < financial_analyzer.py)
+          IP_LOC=$(wc -l < insights_page.py)
+          echo "financial_analyzer.py: $FA_LOC LOC"
+          echo "insights_page.py: $IP_LOC LOC"
+          if [ "$FA_LOC" -gt 15000 ]; then
+            echo "::error::financial_analyzer.py exceeds 15K LOC guardrail ($FA_LOC)"
+            exit 1
+          fi
+
+  # ──────────────────────────────────────────────────────────────
+  # Build & Push Docker Image to GHCR
+  # ──────────────────────────────────────────────────────────────
+  publish:
+    name: Build & Publish Image
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: financial-report-insights
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  # ──────────────────────────────────────────────────────────────
+  # Create GitHub Release
+  # ──────────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate, publish]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges -- financial-report-insights/)
+          else
+            CHANGES=$(git log --pretty=format:"- %s" --no-merges -20 -- financial-report-insights/)
+          fi
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        working-directory: .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## Changes
+            ${{ steps.changelog.outputs.changes }}
+
+            ## Docker Image
+            ```
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+          generate_release_notes: true
