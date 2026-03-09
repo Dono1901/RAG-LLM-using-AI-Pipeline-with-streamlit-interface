@@ -359,3 +359,77 @@ class TestProcessExcelForRagFormat:
                 # Metadata should also exist
                 assert 'metadata' in doc
                 assert doc['metadata']['type'] == 'excel'
+
+
+# ============================================================
+# Row-based _dataframe_to_financial_data tests
+# ============================================================
+
+class TestRowBasedDataframeToFinancialData:
+    @pytest.fixture
+    def analyzer(self):
+        return CharlieAnalyzer()
+
+    def test_row_based_income_statement(self, analyzer):
+        """Items as rows, periods as columns - should pick latest period."""
+        df = pd.DataFrame({
+            'Line Item': ['Revenue', 'Cost of Goods Sold', 'Gross Profit',
+                          'Operating Income', 'Net Income'],
+            'Q1 2024': [500000, 200000, 300000, 150000, 100000],
+            'Q2 2024': [600000, 230000, 370000, 180000, 130000],
+        })
+        data = analyzer._dataframe_to_financial_data(df)
+        assert data.revenue == 600000
+        assert data.cogs == 230000
+        assert data.gross_profit == 370000
+        assert data.operating_income == 180000
+        assert data.net_income == 130000
+
+    def test_row_based_balance_sheet(self, analyzer):
+        """Single-period balance sheet with items as rows."""
+        df = pd.DataFrame({
+            'Account': ['Total Assets', 'Current Assets', 'Total Liabilities',
+                        'Total Equity', 'Cash'],
+            '2024': [1000000, 400000, 600000, 400000, 150000],
+        })
+        data = analyzer._dataframe_to_financial_data(df)
+        assert data.total_assets == 1000000
+        assert data.current_assets == 400000
+        assert data.total_liabilities == 600000
+        assert data.total_equity == 400000
+        assert data.cash == 150000
+
+    def test_row_based_budget(self, analyzer):
+        """Budget/Actual format picks rightmost numeric column."""
+        df = pd.DataFrame({
+            'Category': ['Revenue', 'COGS', 'Net Income', 'Total Assets'],
+            'Budget': [800000, 400000, 200000, 2000000],
+            'Actual': [900000, 420000, 250000, 2100000],
+        })
+        data = analyzer._dataframe_to_financial_data(df)
+        # Should use 'Actual' (rightmost numeric)
+        assert data.revenue == 900000
+        assert data.cogs == 420000
+        assert data.net_income == 250000
+
+    def test_row_based_insufficient_matches(self, analyzer):
+        """Fewer than 3 financial term matches should NOT trigger transpose."""
+        df = pd.DataFrame({
+            'Item': ['Revenue', 'Other stuff', 'Random'],
+            'Value': [100, 200, 300],
+        })
+        data = analyzer._dataframe_to_financial_data(df)
+        # Only 1 match (Revenue) - not enough to trigger row-based fallback
+        # Column headers also don't match -> empty FinancialData
+        assert data.revenue is None
+
+    def test_row_based_non_numeric_values(self, analyzer):
+        """Graceful handling when value columns contain text."""
+        df = pd.DataFrame({
+            'Line Item': ['Revenue', 'COGS', 'Gross Profit', 'Net Income'],
+            'Notes': ['Good', 'OK', 'Fine', 'Great'],
+        })
+        data = analyzer._dataframe_to_financial_data(df)
+        # No numeric columns -> all fields stay None
+        assert data.revenue is None
+        assert data.net_income is None

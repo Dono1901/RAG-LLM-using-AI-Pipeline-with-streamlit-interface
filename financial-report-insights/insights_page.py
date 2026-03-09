@@ -217,6 +217,10 @@ class FinancialInsightsPage:
         self.viz = FinancialVizUtils()
         self.processor = ExcelProcessor(docs_folder)
 
+    def _get_analyzer(self):
+        """Backwards-compat alias for self.analyzer."""
+        return self.analyzer
+
     def render(self):
         """Main page render method."""
         st.title("Financial Insights Dashboard")
@@ -263,6 +267,7 @@ class FinancialInsightsPage:
                     # Sub-tabs for selected category
                     entries = self.CATEGORY_TABS[selected_cat]
                     sub_tabs = st.tabs([label for label, _, _ in entries])
+
 
                     for tab, (label, method, needs_wb) in zip(sub_tabs, entries):
                         with tab:
@@ -3346,7 +3351,7 @@ class FinancialInsightsPage:
     def _render_valuation_indicators(self, df: pd.DataFrame):
         """Render Valuation Indicators analysis tab."""
         from financial_analyzer import ValuationIndicatorsResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: ValuationIndicatorsResult = self.analyzer.valuation_indicators(data)
 
         # Grade badge
@@ -3421,7 +3426,7 @@ class FinancialInsightsPage:
     def _render_sustainable_growth(self, df: pd.DataFrame):
         """Render Sustainable Growth analysis tab."""
         from financial_analyzer import SustainableGrowthResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: SustainableGrowthResult = self.analyzer.sustainable_growth_analysis(data)
 
         # Grade badge
@@ -3495,7 +3500,7 @@ class FinancialInsightsPage:
     def _render_concentration_risk(self, df: pd.DataFrame):
         """Render Concentration Risk analysis tab."""
         from financial_analyzer import ConcentrationRiskResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: ConcentrationRiskResult = self.analyzer.concentration_risk_analysis(data)
 
         # Grade badge
@@ -3562,7 +3567,7 @@ class FinancialInsightsPage:
     def _render_margin_of_safety(self, df: pd.DataFrame):
         """Render Margin of Safety analysis tab."""
         from financial_analyzer import MarginOfSafetyResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: MarginOfSafetyResult = self.analyzer.margin_of_safety_analysis(data)
 
         grade_colors = {"Wide Margin": "green", "Adequate": "blue", "Thin": "orange", "No Margin": "red"}
@@ -3634,7 +3639,7 @@ class FinancialInsightsPage:
     def _render_earnings_quality(self, df: pd.DataFrame):
         """Render Earnings Quality analysis tab."""
         from financial_analyzer import EarningsQualityResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: EarningsQualityResult = self.analyzer.earnings_quality_analysis(data)
 
         grade_colors = {"High": "green", "Adequate": "blue", "Questionable": "orange", "Poor": "red"}
@@ -3703,7 +3708,7 @@ class FinancialInsightsPage:
     def _render_financial_flexibility(self, df: pd.DataFrame):
         """Render Financial Flexibility analysis tab."""
         from financial_analyzer import FinancialFlexibilityResult
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result: FinancialFlexibilityResult = self.analyzer.financial_flexibility_analysis(data)
 
         grade_colors = {"Highly Flexible": "green", "Flexible": "blue", "Constrained": "orange", "Rigid": "red"}
@@ -4187,7 +4192,7 @@ class FinancialInsightsPage:
         """Render Operating Leverage Analysis tab (Phase 40)."""
         from financial_analyzer import OperatingLeverageResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.operating_leverage_analysis(data)
 
         grade_colors = {
@@ -4258,7 +4263,7 @@ class FinancialInsightsPage:
         """Render Cash Conversion Efficiency tab (Phase 41)."""
         from financial_analyzer import CashConversionResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.cash_conversion_analysis(data)
 
         grade_colors = {
@@ -4477,7 +4482,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, ProfitRetentionPowerResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.profit_retention_power_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4518,7 +4523,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, EarningsToDebtResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.earnings_to_debt_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4559,7 +4564,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, RevenueGrowthResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result: RevenueGrowthResult = analyzer.revenue_growth_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4597,7 +4602,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, OperatingMarginResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result: OperatingMarginResult = analyzer.operating_margin_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4632,7 +4637,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, DebtToEquityResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result: DebtToEquityResult = analyzer.debt_to_equity_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4670,7 +4675,7 @@ class FinancialInsightsPage:
         from financial_analyzer import CharlieAnalyzer, CashFlowToDebtResult
 
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result: CashFlowToDebtResult = analyzer.cash_flow_to_debt_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4946,7 +4951,7 @@ class FinancialInsightsPage:
     def _render_inventory_coverage(self, df: pd.DataFrame):
         """Phase 309: Inventory Coverage Analysis."""
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.inventory_coverage_analysis(data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -4976,7 +4981,7 @@ class FinancialInsightsPage:
         """Render Phase 307: CapEx to Revenue Analysis."""
         from financial_analyzer import CharlieAnalyzer, CapexToRevenueResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.capex_to_revenue_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5010,7 +5015,7 @@ class FinancialInsightsPage:
         """Phase 294: Inventory Holding Cost tab."""
         from financial_analyzer import CharlieAnalyzer
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.inventory_holding_cost_analysis(fd)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5040,7 +5045,7 @@ class FinancialInsightsPage:
         """Phase 293: Funding Mix Balance tab."""
         from financial_analyzer import CharlieAnalyzer
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.funding_mix_balance_analysis(fd)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5070,7 +5075,7 @@ class FinancialInsightsPage:
         """Phase 292: Expense Ratio Discipline tab."""
         from financial_analyzer import CharlieAnalyzer
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.expense_ratio_discipline_analysis(fd)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5100,7 +5105,7 @@ class FinancialInsightsPage:
         """Phase 291: Revenue Cash Realization tab."""
         from financial_analyzer import CharlieAnalyzer
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.revenue_cash_realization_analysis(data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5303,8 +5308,8 @@ class FinancialInsightsPage:
     def _render_debt_quality(self, df: pd.DataFrame):
         """Phase 267: Debt Quality tab."""
         from financial_analyzer import DebtQualityResult
-        analyzer = self._get_analyzer()
-        data = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.debt_quality_analysis(data)
         if not isinstance(result, DebtQualityResult):
             st.warning("Debt Quality analysis unavailable.")
@@ -5422,7 +5427,7 @@ class FinancialInsightsPage:
         """Phase 251: Dividend Payout tab."""
         from financial_analyzer import CharlieAnalyzer, DividendPayoutResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.dividend_payout_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5452,7 +5457,7 @@ class FinancialInsightsPage:
         """Phase 249: Operating Cash Flow Ratio tab."""
         from financial_analyzer import CharlieAnalyzer, OperatingCashFlowRatioResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.operating_cash_flow_ratio_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5482,7 +5487,7 @@ class FinancialInsightsPage:
         """Phase 248: Cash Conversion Cycle tab."""
         from financial_analyzer import CharlieAnalyzer, CashConversionCycleResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.cash_conversion_cycle_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5512,7 +5517,7 @@ class FinancialInsightsPage:
         """Phase 247: Inventory Turnover tab."""
         from financial_analyzer import CharlieAnalyzer, InventoryTurnoverResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.inventory_turnover_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5545,7 +5550,7 @@ class FinancialInsightsPage:
         """Phase 246: Payables Turnover tab."""
         from financial_analyzer import CharlieAnalyzer, PayablesTurnoverResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.payables_turnover_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5578,7 +5583,7 @@ class FinancialInsightsPage:
         """Phase 245: Receivables Turnover tab."""
         from financial_analyzer import CharlieAnalyzer, ReceivablesTurnoverResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.receivables_turnover_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5611,7 +5616,7 @@ class FinancialInsightsPage:
         """Phase 237: Cash Conversion Efficiency tab."""
         from financial_analyzer import CharlieAnalyzer, CashConversionEfficiencyResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.cash_conversion_efficiency_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5652,7 +5657,7 @@ class FinancialInsightsPage:
         """Phase 236: Fixed Cost Leverage Ratio tab."""
         from financial_analyzer import CharlieAnalyzer, FixedCostLeverageRatioResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.fixed_cost_leverage_ratio_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5693,7 +5698,7 @@ class FinancialInsightsPage:
         """Phase 232: Revenue Quality Index tab."""
         from financial_analyzer import CharlieAnalyzer, RevenueQualityIndexResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.revenue_quality_index_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5733,7 +5738,7 @@ class FinancialInsightsPage:
     def _render_cost_control(self, df: pd.DataFrame):
         """Phase 215: Cost Control tab."""
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.cost_control_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5919,7 +5924,7 @@ class FinancialInsightsPage:
         """Phase 198: Equity Preservation tab."""
         st.subheader("Equity Preservation Analysis")
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.equity_preservation_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5949,7 +5954,7 @@ class FinancialInsightsPage:
         """Phase 197: Debt Management tab."""
         st.subheader("Debt Management Analysis")
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.debt_management_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -5979,7 +5984,7 @@ class FinancialInsightsPage:
         """Phase 196: Income Retention tab."""
         st.subheader("Income Retention Analysis")
         analyzer = CharlieAnalyzer()
-        fin = self._dataframe_to_financial_data(df)
+        fin = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.income_retention_analysis(fin)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6009,7 +6014,7 @@ class FinancialInsightsPage:
         """Phase 195: Operational Efficiency tab."""
         st.subheader("Operational Efficiency Analysis")
         try:
-            data = self._dataframe_to_financial_data(df)
+            data = self.analyzer._dataframe_to_financial_data(df)
             result = self.analyzer.operational_efficiency_analysis(data)
 
             grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6041,7 +6046,7 @@ class FinancialInsightsPage:
         """Phase 191: Operating Momentum tab."""
         st.subheader("Operating Momentum Analysis")
         try:
-            data = self._dataframe_to_financial_data(df)
+            data = self.analyzer._dataframe_to_financial_data(df)
             result = self.analyzer.operating_momentum_analysis(data)
 
             grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6244,7 +6249,7 @@ class FinancialInsightsPage:
         """Phase 172: Asset Deployment Efficiency tab."""
         from financial_analyzer import AssetDeploymentEfficiencyResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result: AssetDeploymentEfficiencyResult = analyzer.asset_deployment_efficiency_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6278,7 +6283,7 @@ class FinancialInsightsPage:
         """Phase 171: Profit Sustainability tab."""
         from financial_analyzer import ProfitSustainabilityResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result: ProfitSustainabilityResult = analyzer.profit_sustainability_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6312,7 +6317,7 @@ class FinancialInsightsPage:
         """Phase 170: Debt Discipline tab."""
         from financial_analyzer import DebtDisciplineResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result: DebtDisciplineResult = analyzer.debt_discipline_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6346,7 +6351,7 @@ class FinancialInsightsPage:
         """Phase 168: Capital Preservation tab."""
         from financial_analyzer import CapitalPreservationResult
         analyzer = CharlieAnalyzer()
-        fin_data = self._dataframe_to_financial_data(df)
+        fin_data = self.analyzer._dataframe_to_financial_data(df)
         result: CapitalPreservationResult = analyzer.capital_preservation_analysis(fin_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6380,8 +6385,8 @@ class FinancialInsightsPage:
         """Phase 160: Obligation Coverage tab."""
         from financial_analyzer import ObligationCoverageResult
         st.subheader("Obligation Coverage Analysis")
-        fd = self._dataframe_to_financial_data(df)
-        analyzer = self._get_analyzer()
+        fd = self.analyzer._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
         result = analyzer.obligation_coverage_analysis(fd)
 
         if result.oc_grade:
@@ -6418,8 +6423,8 @@ class FinancialInsightsPage:
         """Phase 159: Internal Growth Capacity tab."""
         from financial_analyzer import InternalGrowthCapacityResult
         st.subheader("Internal Growth Capacity Analysis")
-        fd = self._dataframe_to_financial_data(df)
-        analyzer = self._get_analyzer()
+        fd = self.analyzer._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
         result = analyzer.internal_growth_capacity_analysis(fd)
 
         if result.igc_grade:
@@ -6587,7 +6592,7 @@ class FinancialInsightsPage:
     def _render_cash_flow_stability(self, df: pd.DataFrame):
         """Render Phase 125: Cash Flow Stability Analysis."""
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.cash_flow_stability_analysis(data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6616,7 +6621,7 @@ class FinancialInsightsPage:
     def _render_income_quality(self, df: pd.DataFrame):
         """Render Phase 124: Income Quality Analysis."""
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.income_quality_analysis(data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6645,7 +6650,7 @@ class FinancialInsightsPage:
     def _render_dupont_analysis(self, df: pd.DataFrame):
         """Render Phase 119: DuPont Analysis."""
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.dupont_analysis(data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -6675,7 +6680,7 @@ class FinancialInsightsPage:
         """Render Phase 114: Receivables Management Analysis."""
         from financial_analyzer import ReceivablesManagementResult
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.receivables_management_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.rm_grade, "gray")
@@ -6702,7 +6707,7 @@ class FinancialInsightsPage:
         """Render Phase 109: Solvency Depth Analysis."""
         from financial_analyzer import SolvencyDepthResult
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.solvency_depth_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.sd_grade, "gray")
@@ -6728,7 +6733,7 @@ class FinancialInsightsPage:
         """Render Phase 105: Operational Leverage Depth tab."""
         from financial_analyzer import CharlieAnalyzer, OperationalLeverageDepthResult
         analyzer = CharlieAnalyzer()
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.operational_leverage_depth_analysis(fd)
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.old_grade, "gray")
         st.markdown(f"### Operational Leverage Depth: :{grade_color}[{result.old_grade}] ({result.old_score}/10)")
@@ -6753,8 +6758,8 @@ class FinancialInsightsPage:
     def _render_profitability_depth(self, df: pd.DataFrame):
         """Phase 103: Profitability Depth tab."""
         from financial_analyzer import ProfitabilityDepthResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.profitability_depth_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.pd_grade, "gray")
@@ -6775,8 +6780,8 @@ class FinancialInsightsPage:
     def _render_revenue_efficiency(self, df: pd.DataFrame):
         """Phase 102: Revenue Efficiency tab."""
         from financial_analyzer import RevenueEfficiencyResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.revenue_efficiency_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.rev_eff_grade, "gray")
@@ -6797,8 +6802,8 @@ class FinancialInsightsPage:
     def _render_debt_composition(self, df: pd.DataFrame):
         """Phase 101: Debt Composition tab."""
         from financial_analyzer import DebtCompositionResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.debt_composition_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.dco_grade, "gray")
@@ -6819,8 +6824,8 @@ class FinancialInsightsPage:
     def _render_operational_risk(self, df: pd.DataFrame):
         """Phase 92: Operational Risk tab."""
         from financial_analyzer import OperationalRiskResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.operational_risk_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.or_grade, "gray")
@@ -6841,8 +6846,8 @@ class FinancialInsightsPage:
     def _render_financial_health_score(self, df: pd.DataFrame):
         """Phase 90: Financial Health Score tab."""
         from financial_analyzer import FinancialHealthScoreResult
-        analyzer = self._get_analyzer()
-        fd = self._dataframe_to_financial_data(df)
+        analyzer = self.analyzer
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.financial_health_score_analysis(fd)
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
         color = grade_colors.get(result.fh_grade, "gray")
@@ -6863,7 +6868,7 @@ class FinancialInsightsPage:
     def _render_asset_quality(self, df: pd.DataFrame):
         """Phase 86: Asset Quality Analysis tab."""
         from financial_analyzer import AssetQualityResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: AssetQualityResult = self.analyzer.asset_quality_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.aq_grade, "gray")
@@ -6895,7 +6900,7 @@ class FinancialInsightsPage:
     def _render_financial_resilience(self, df: pd.DataFrame):
         """Phase 82: Financial Resilience Analysis tab."""
         from financial_analyzer import FinancialResilienceResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: FinancialResilienceResult = self.analyzer.financial_resilience_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.fr_grade, "gray")
@@ -6927,7 +6932,7 @@ class FinancialInsightsPage:
     def _render_equity_multiplier(self, df: pd.DataFrame):
         """Phase 81: Equity Multiplier Analysis tab."""
         from financial_analyzer import EquityMultiplierResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: EquityMultiplierResult = self.analyzer.equity_multiplier_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.em_grade, "gray")
@@ -6959,7 +6964,7 @@ class FinancialInsightsPage:
     def _render_defensive_interval(self, df: pd.DataFrame):
         """Phase 80: Defensive Interval Analysis tab."""
         from financial_analyzer import DefensiveIntervalResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: DefensiveIntervalResult = self.analyzer.defensive_interval_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.di_grade, "gray")
@@ -6992,7 +6997,7 @@ class FinancialInsightsPage:
     def _render_cash_burn(self, df: pd.DataFrame):
         """Phase 79: Cash Burn Analysis tab."""
         from financial_analyzer import CashBurnResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: CashBurnResult = self.analyzer.cash_burn_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.cb_grade, "gray")
@@ -7025,7 +7030,7 @@ class FinancialInsightsPage:
     def _render_profit_retention(self, df: pd.DataFrame):
         """Phase 78: Profit Retention Analysis tab."""
         from financial_analyzer import ProfitRetentionResult
-        fd = self._dataframe_to_financial_data(df)
+        fd = self.analyzer._dataframe_to_financial_data(df)
         result: ProfitRetentionResult = self.analyzer.profit_retention_analysis(fd)
 
         grade_color = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}.get(result.pr_grade, "gray")
@@ -7059,7 +7064,7 @@ class FinancialInsightsPage:
         """Render Debt Service Coverage tab."""
         from financial_analyzer import DebtServiceCoverageResult
         analyzer = CharlieAnalyzer()
-        financial_data = self._dataframe_to_financial_data(df)
+        financial_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.debt_service_coverage_analysis(financial_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -7090,7 +7095,7 @@ class FinancialInsightsPage:
         """Render Capital Allocation tab."""
         from financial_analyzer import CapitalAllocationResult
         analyzer = CharlieAnalyzer()
-        financial_data = self._dataframe_to_financial_data(df)
+        financial_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.capital_allocation_analysis(financial_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -7121,7 +7126,7 @@ class FinancialInsightsPage:
         """Render Tax Efficiency tab."""
         from financial_analyzer import TaxEfficiencyResult
         analyzer = CharlieAnalyzer()
-        financial_data = self._dataframe_to_financial_data(df)
+        financial_data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.tax_efficiency_analysis(financial_data)
 
         grade_colors = {"Excellent": "green", "Good": "blue", "Adequate": "orange", "Weak": "red"}
@@ -7151,7 +7156,7 @@ class FinancialInsightsPage:
         st.subheader("Return on Invested Capital (ROIC)")
         from financial_analyzer import CharlieAnalyzer, ROICResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.roic_analysis(data)
 
         if result.roic_pct is None:
@@ -7198,7 +7203,7 @@ class FinancialInsightsPage:
         st.subheader("Return on Assets (ROA) Quality")
         from financial_analyzer import CharlieAnalyzer, ROAQualityResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.roa_quality_analysis(data)
 
         if result.roa_pct is None:
@@ -7275,7 +7280,7 @@ class FinancialInsightsPage:
         st.subheader("Return on Equity (ROE) Analysis")
         from financial_analyzer import CharlieAnalyzer, ROEAnalysisResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.roe_analysis(data)
 
         if result.roe_pct is None:
@@ -7355,7 +7360,7 @@ class FinancialInsightsPage:
         st.subheader("Net Profit Margin Analysis")
         from financial_analyzer import CharlieAnalyzer, NetProfitMarginResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.net_profit_margin_analysis(data)
 
         if result.net_margin_pct is None:
@@ -7421,7 +7426,7 @@ class FinancialInsightsPage:
         st.subheader("EBITDA Margin Quality Analysis")
         from financial_analyzer import CharlieAnalyzer, EbitdaMarginQualityResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.ebitda_margin_quality_analysis(data)
 
         if result.ebitda_margin_pct is None:
@@ -7485,7 +7490,7 @@ class FinancialInsightsPage:
         st.subheader("Gross Margin Stability Analysis")
         from financial_analyzer import CharlieAnalyzer, GrossMarginStabilityResult
         analyzer = CharlieAnalyzer()
-        data = self._dataframe_to_financial_data(df)
+        data = self.analyzer._dataframe_to_financial_data(df)
         result = analyzer.gross_margin_stability_analysis(data)
 
         if result.gross_margin_pct is None:

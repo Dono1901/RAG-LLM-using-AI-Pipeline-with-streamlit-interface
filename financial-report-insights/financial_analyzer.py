@@ -13806,6 +13806,12 @@ class CharlieAnalyzer:
             if best_attr is not None:
                 column_map[col] = best_attr
 
+        # Fallback: detect row-based layout (financial terms as row values)
+        if not column_map:
+            label_col = self._detect_label_column(df, mappings)
+            if label_col is not None:
+                return self._transpose_financial_df(df, label_col, mappings)
+
         # Extract values (use first row if single row, or sum/latest)
         for col, attr in column_map.items():
             try:
@@ -13820,6 +13826,48 @@ class CharlieAnalyzer:
             except (ValueError, TypeError):
                 pass
 
+        return data
+
+    def _detect_label_column(self, df: pd.DataFrame, mappings: dict) -> object:
+        """Find the first text column with >= 3 financial term matches in row values."""
+        all_patterns = []
+        for patterns in mappings.values():
+            all_patterns.extend(patterns)
+        for col in df.columns:
+            if df[col].dtype == object:
+                matches = 0
+                for val in df[col].dropna():
+                    val_lower = str(val).lower().strip()
+                    if any(p in val_lower for p in all_patterns):
+                        matches += 1
+                if matches >= 3:
+                    return col
+        return None
+
+    def _transpose_financial_df(self, df: pd.DataFrame, label_col: str, mappings: dict) -> 'FinancialData':
+        """Map row labels to FinancialData using the rightmost numeric column."""
+        data = FinancialData()
+        # Find rightmost numeric column (latest period)
+        numeric_cols = [c for c in df.columns if c != label_col and pd.api.types.is_numeric_dtype(df[c])]
+        if not numeric_cols:
+            return data
+        value_col = numeric_cols[-1]
+        for _, row in df.iterrows():
+            label = str(row[label_col]).lower().strip()
+            best_attr = None
+            best_len = 0
+            for attr, patterns in mappings.items():
+                for pattern in patterns:
+                    if pattern in label and len(pattern) > best_len:
+                        best_attr = attr
+                        best_len = len(pattern)
+            if best_attr is not None:
+                try:
+                    val = row[value_col]
+                    if val is not None and not pd.isna(val):
+                        setattr(data, best_attr, float(val))
+                except (ValueError, TypeError):
+                    pass
         return data
 
 
