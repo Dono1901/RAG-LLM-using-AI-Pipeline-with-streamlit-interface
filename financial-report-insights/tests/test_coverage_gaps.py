@@ -216,7 +216,7 @@ class TestChunkText:
 
     def test_empty_text(self, rag_instance):
         chunks = rag_instance._chunk_text("", chunk_size=500, overlap=50)
-        assert len(chunks) == 1  # returns [text] as fallback
+        assert len(chunks) == 0  # empty text returns empty list
 
     def test_overlap_creates_redundancy(self, rag_instance):
         text = " ".join(f"word{i}" for i in range(50))

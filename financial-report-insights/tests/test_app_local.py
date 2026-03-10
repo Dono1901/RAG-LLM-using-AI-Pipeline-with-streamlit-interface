@@ -243,11 +243,11 @@ class TestChunkText:
 
     def test_empty_text_returns_original(self, rag_empty):
         chunks = rag_empty._chunk_text("")
-        assert len(chunks) == 1
+        assert len(chunks) == 0  # empty text returns empty list
 
     def test_whitespace_only_returns_original(self, rag_empty):
         chunks = rag_empty._chunk_text("   ")
-        assert len(chunks) == 1
+        assert len(chunks) == 0  # whitespace-only returns empty list
 
 
 # ---------------------------------------------------------------------------

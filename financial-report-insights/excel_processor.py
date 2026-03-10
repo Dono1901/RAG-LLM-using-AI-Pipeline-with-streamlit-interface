@@ -694,12 +694,15 @@ class ExcelProcessor:
         # First, create a structured summary
         summary_lines = [
             f"Data from sheet: {sheet_name}",
-            f"Columns ({len(df.columns)}): {', '.join(df.columns[:20])}",
-            f"Rows: {len(df)}",
+            f"Source file: {file_name}",
+            f"Rows: {len(df)} total",
         ]
 
         if detected_type:
-            summary_lines.append(f"Detected type: {detected_type}")
+            summary_lines.append(f"Statement type: {detected_type}")
+
+        # Always include full column list for context
+        summary_lines.append(f"Columns: {', '.join(str(c) for c in df.columns)}")
 
         summary_text = '\n'.join(summary_lines)
 
@@ -731,7 +734,10 @@ class ExcelProcessor:
                 cell_references=f"{sheet_name}!A{start_idx + 2}:Z{end_idx + 1}",
                 metadata={
                     'source_file': file_name,
-                    'chunk_index': start_idx // rows_per_chunk
+                    'chunk_index': start_idx // rows_per_chunk,
+                    'total_chunks': (len(df) + rows_per_chunk - 1) // rows_per_chunk,
+                    'statement_type': detected_type or 'unknown',
+                    'period_columns': [str(c) for c in df.columns if self._is_time_period(str(c))],
                 }
             ))
 

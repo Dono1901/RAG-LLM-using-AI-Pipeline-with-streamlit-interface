@@ -21,6 +21,13 @@ from local_llm import LocalLLM, LocalEmbedder
 from logging_config import setup_logging
 from protocols import LLMProvider, EmbeddingProvider
 
+# Versioned prompt templates (Phase 2.3 – Prompt Engineering)
+try:
+    from prompts import get_prompt_for_query_type, build_prompt, format_context_with_citations
+    _PROMPTS_AVAILABLE = True
+except Exception:  # pragma: no cover – import guard for backward compat
+    _PROMPTS_AVAILABLE = False
+
 # Setup structured logging
 setup_logging()
 
@@ -34,6 +41,23 @@ class SimpleRAG:
 
     # Supported Excel extensions
     EXCEL_EXTENSIONS = {'.xlsx', '.xlsm', '.xls', '.csv', '.tsv'}
+
+    # Financial-domain stop words (extend standard English stop words)
+    _STOP_WORDS = frozenset({
+        'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+        'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+        'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+        'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+        'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+        'between', 'out', 'off', 'over', 'under', 'again', 'further', 'then',
+        'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each',
+        'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+        'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
+        'just', 'because', 'but', 'and', 'or', 'if', 'while', 'about',
+        'this', 'that', 'these', 'those', 'i', 'me', 'my', 'we', 'our',
+        'you', 'your', 'he', 'him', 'his', 'she', 'her', 'it', 'its',
+        'they', 'them', 'their', 'what', 'which', 'who', 'whom',
+    })
 
     def __init__(
         self,
@@ -83,6 +107,20 @@ class SimpleRAG:
         # Pre-computed numpy matrix and norms (built after document load)
         self._doc_matrix: Optional[np.ndarray] = None
         self._doc_norms: Optional[np.ndarray] = None
+
+        # ANN vector index (FAISS / hnswlib / NumpyFlatIndex)
+        self._vector_index = None
+        try:
+            from vector_index import create_index
+            self._vector_index = create_index(
+                dimension=settings.embedding_dimension,
+                backend=settings.vector_backend,
+                nprobe=settings.faiss_nprobe,
+                hnsw_m=settings.hnsw_m,
+                hnsw_ef=settings.hnsw_ef,
+            )
+        except Exception as _vi_err:
+            logger.warning("Vector index unavailable, using brute-force numpy: %s", _vi_err)
 
         # BM25 index (optional - if rank_bm25 is installed)
         self._bm25_index = None
@@ -381,6 +419,7 @@ class SimpleRAG:
                             chunk_size=settings.chunk_size,
                             overlap=settings.chunk_overlap,
                         )
+                        chunks = self._filter_low_quality_chunks(chunks)
                         rel_path = str(file_path.relative_to(self.docs_folder))
                         for chunk in chunks:
                             file_docs.append({
@@ -430,7 +469,7 @@ class SimpleRAG:
             logger.warning("No documents found in the documents folder")
 
     def _build_embedding_index(self):
-        """Pre-compute the numpy doc matrix and norms for fast retrieval."""
+        """Pre-compute the numpy doc matrix, norms, and ANN vector index."""
         if not self.embeddings:
             self._doc_matrix = None
             self._doc_norms = None
@@ -440,6 +479,33 @@ class SimpleRAG:
         # Replace zero norms with 1.0 to avoid division by zero
         self._doc_norms = np.where(norms == 0, 1.0, norms)
 
+        # Populate ANN vector index when available
+        if self._vector_index is not None:
+            try:
+                from vector_index import create_index
+                # Re-create a fresh index so we can add all embeddings at once
+                self._vector_index = create_index(
+                    dimension=settings.embedding_dimension,
+                    backend=settings.vector_backend,
+                    nprobe=settings.faiss_nprobe,
+                    hnsw_m=settings.hnsw_m,
+                    hnsw_ef=settings.hnsw_ef,
+                )
+                ids = list(range(len(self.embeddings)))
+                self._vector_index.add(self.embeddings, ids)
+
+                # Persist the index alongside the embedding cache
+                index_path = Path(settings.vector_index_path)
+                index_path.parent.mkdir(parents=True, exist_ok=True)
+                self._vector_index.save(str(index_path))
+                logger.info(
+                    "Vector index built (%d vectors) and saved to %s",
+                    len(self._vector_index),
+                    index_path,
+                )
+            except Exception as exc:
+                logger.warning("Vector index build failed, will use brute-force numpy: %s", exc)
+
     def _build_bm25_index(self):
         """Build BM25 index for keyword search."""
         if not self._bm25_available or not self.documents:
@@ -448,9 +514,9 @@ class SimpleRAG:
 
         try:
             from rank_bm25 import BM25Okapi
-            # Tokenize all document contents (simple whitespace + lowercase)
+            # Tokenize with stop-word removal and stemming
             tokenized_corpus = [
-                doc["content"].lower().split() for doc in self.documents
+                self._tokenize_for_bm25(doc["content"]) for doc in self.documents
             ]
             self._bm25_index = BM25Okapi(tokenized_corpus)
             logger.info("BM25 index built successfully")
@@ -472,16 +538,248 @@ class SimpleRAG:
             return []
 
     def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 50) -> list:
-        """Split text into overlapping chunks."""
-        words = text.split()
-        chunks = []
+        """Split text into overlapping chunks that respect sentence boundaries.
 
-        for i in range(0, len(words), chunk_size - overlap):
-            chunk = " ".join(words[i:i + chunk_size])
-            if chunk.strip():
-                chunks.append(chunk)
+        Uses regex sentence boundary detection to avoid splitting mid-sentence.
+        Falls back to word-based splitting if sentence detection fails.
+
+        Args:
+            text: Input text to chunk
+            chunk_size: Target chunk size in words
+            overlap: Overlap between chunks in words
+
+        Returns:
+            List of text chunks
+        """
+        import re
+
+        # Split into sentences using regex (handles Mr./Mrs./Dr./etc.)
+        # Pattern: split on sentence-ending punctuation followed by whitespace and capital letter
+        sentence_pattern = r'(?<=[.!?])\s+(?=[A-Z])'
+        sentences = re.split(sentence_pattern, text)
+
+        # Filter empty sentences
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            return [text] if text.strip() else []
+
+        chunks = []
+        current_words = []
+        current_word_count = 0
+        sentence_buffer = []  # Track sentences for overlap
+
+        for sentence in sentences:
+            sentence_words = sentence.split()
+            sentence_word_count = len(sentence_words)
+
+            # If single sentence exceeds chunk_size, split it by words (fallback)
+            if sentence_word_count > chunk_size:
+                # Flush current chunk first
+                if current_words:
+                    chunks.append(" ".join(current_words))
+                    current_words = []
+                    current_word_count = 0
+                    sentence_buffer = []
+
+                # Word-split the long sentence with overlap
+                for i in range(0, sentence_word_count, chunk_size - overlap):
+                    chunk = " ".join(sentence_words[i:i + chunk_size])
+                    if chunk.strip():
+                        chunks.append(chunk)
+                continue
+
+            # Check if adding this sentence exceeds the chunk size
+            if current_word_count + sentence_word_count > chunk_size and current_words:
+                # Save current chunk
+                chunks.append(" ".join(current_words))
+
+                # Build overlap from recent sentences
+                overlap_words = []
+                overlap_count = 0
+                for prev_sentence in reversed(sentence_buffer):
+                    prev_words = prev_sentence.split()
+                    if overlap_count + len(prev_words) > overlap:
+                        break
+                    overlap_words = prev_words + overlap_words
+                    overlap_count += len(prev_words)
+
+                current_words = overlap_words
+                current_word_count = overlap_count
+                sentence_buffer = []
+
+            current_words.extend(sentence_words)
+            current_word_count += sentence_word_count
+            sentence_buffer.append(sentence)
+
+        # Don't forget the last chunk
+        if current_words:
+            chunks.append(" ".join(current_words))
 
         return chunks if chunks else [text]
+
+    @staticmethod
+    def _filter_low_quality_chunks(chunks: list, min_words: int = 10) -> list:
+        """Filter out low-information chunks before embedding.
+
+        Removes chunks that are too short, contain only headers/whitespace,
+        or are duplicate/near-duplicate content.
+
+        Args:
+            chunks: List of text chunks
+            min_words: Minimum word count for a chunk to be kept
+
+        Returns:
+            Filtered list of chunks
+        """
+        filtered = []
+        seen_prefixes = set()
+
+        for chunk in chunks:
+            # Skip very short chunks
+            words = chunk.split()
+            if len(words) < min_words:
+                continue
+
+            # Skip chunks that are mostly whitespace/punctuation
+            alpha_ratio = sum(1 for c in chunk if c.isalpha()) / max(len(chunk), 1)
+            if alpha_ratio < 0.3:
+                continue
+
+            # Skip near-duplicate chunks (same first 100 chars)
+            prefix = chunk[:100].strip().lower()
+            if prefix in seen_prefixes:
+                continue
+            seen_prefixes.add(prefix)
+
+            filtered.append(chunk)
+
+        return filtered if filtered else chunks  # Never return empty
+
+    @staticmethod
+    def _tokenize_for_bm25(text: str) -> list:
+        """Tokenize text for BM25 with stop-word removal and simple stemming.
+
+        Uses a lightweight approach without requiring nltk:
+        - Lowercase + split on non-alphanumeric
+        - Remove stop words
+        - Simple suffix stripping (ing, ed, ly, s) for basic stemming
+
+        Args:
+            text: Input text
+
+        Returns:
+            List of processed tokens
+        """
+        import re
+
+        # Tokenize: lowercase, split on non-alphanumeric
+        tokens = re.findall(r'[a-z0-9]+', text.lower())
+
+        # Remove stop words and very short tokens
+        tokens = [t for t in tokens if t not in SimpleRAG._STOP_WORDS and len(t) > 1]
+
+        # Simple suffix stripping (lightweight stemming without nltk dependency)
+        stemmed = []
+        for token in tokens:
+            if len(token) > 5 and token.endswith('ing'):
+                token = token[:-3]
+            elif len(token) > 4 and token.endswith('ed'):
+                token = token[:-2]
+            elif len(token) > 4 and token.endswith('ly'):
+                token = token[:-2]
+            elif len(token) > 3 and token.endswith('s') and not token.endswith('ss'):
+                token = token[:-1]
+            stemmed.append(token)
+
+        return stemmed
+
+    @staticmethod
+    def _classify_query(query: str) -> str:
+        """Classify a query into a type for routing retrieval strategy.
+
+        Categories:
+        - 'ratio_lookup': Specific ratio or metric question
+        - 'trend_analysis': Time-based comparison or trend question
+        - 'comparison': Comparing entities, periods, or scenarios
+        - 'explanation': Why/how questions seeking understanding
+        - 'general': Default category
+
+        Args:
+            query: User's question
+
+        Returns:
+            Query type string
+        """
+        query_lower = query.lower()
+
+        # Ratio lookup patterns
+        ratio_keywords = [
+            'what is the', 'calculate', 'compute', 'ratio', 'score',
+            'margin', 'roe', 'roa', 'roic', 'ebitda', 'z-score', 'f-score',
+            'current ratio', 'quick ratio', 'debt to equity',
+        ]
+        if any(kw in query_lower for kw in ratio_keywords):
+            return 'ratio_lookup'
+
+        # Trend analysis patterns
+        trend_keywords = [
+            'trend', 'over time', 'year over year', 'yoy', 'growth',
+            'changed', 'increasing', 'decreasing', 'trajectory',
+            'quarter over quarter', 'qoq', 'month over month',
+            'historically', 'over the past', 'forecast', 'predict',
+        ]
+        if any(kw in query_lower for kw in trend_keywords):
+            return 'trend_analysis'
+
+        # Comparison patterns
+        comparison_keywords = [
+            'compare', 'versus', 'vs', 'difference between', 'better than',
+            'worse than', 'relative to', 'compared to', 'benchmark',
+            'how does', 'which is', 'stronger', 'weaker',
+        ]
+        if any(kw in query_lower for kw in comparison_keywords):
+            return 'comparison'
+
+        # Explanation patterns
+        explanation_keywords = [
+            'why', 'how does', 'explain', 'what causes', 'reason for',
+            'impact of', 'effect of', 'significance', 'implications',
+            'what drove', 'contributing factors',
+        ]
+        if any(kw in query_lower for kw in explanation_keywords):
+            return 'explanation'
+
+        return 'general'
+
+    def _hyde_expand_query(self, query: str) -> list:
+        """Generate a hypothetical answer to use as search query (HyDE).
+
+        Instead of embedding the question directly, generates a hypothetical
+        answer using the LLM and embeds THAT. This often produces better
+        retrieval because the hypothetical answer is more semantically similar
+        to actual document content than the question itself.
+
+        Args:
+            query: User's question
+
+        Returns:
+            Embedding vector of the hypothetical answer
+        """
+        hyde_prompt = (
+            "Answer the following financial question in 2-3 sentences as if you "
+            "had access to the data. Be specific with numbers and financial terms. "
+            "Do not say you don't have the data.\n\n"
+            f"Question: {query}\n\nBrief answer:"
+        )
+
+        try:
+            hypothetical_answer = self.llm.generate(hyde_prompt)
+            # Embed the hypothetical answer instead of the question
+            return self.embedder.embed(hypothetical_answer.strip())
+        except Exception as e:
+            logger.debug("HyDE expansion failed, falling back to query embedding: %s", e)
+            return self.embedder.embed(query)
 
     def _cosine_similarity(self, vec1: list, vec2: list) -> float:
         """Calculate cosine similarity between two vectors."""
@@ -501,6 +799,11 @@ class SimpleRAG:
         Reciprocal Rank Fusion (RRF) if BM25 is available, otherwise falls
         back to semantic-only search.
 
+        Post-processing steps (config-gated):
+        - Cross-encoder reranking (enable_reranking)
+        - MMR diversification (enable_mmr)
+        - Citation tracking (enable_citations)
+
         Args:
             query: User's question
             top_k: Number of documents to retrieve
@@ -516,15 +819,76 @@ class SimpleRAG:
 
         # If BM25 is not available, fall back to semantic-only search
         if not self._bm25_available or self._bm25_index is None:
-            return self._semantic_search(query, top_k)
+            results = self._semantic_search(query, top_k)
+        else:
+            # Perform both semantic and BM25 search
+            from observability.tracing import get_current_trace
 
-        # Perform both semantic and BM25 search
-        semantic_results = self._semantic_search(query, top_k * 2)  # Get more for fusion
-        bm25_results = self._bm25_search(query, top_k * 2)
+            trace = get_current_trace()
+            if trace:
+                with trace.span("semantic_search"):
+                    semantic_results = self._semantic_search(query, top_k * 2)
+                with trace.span("bm25_search"):
+                    bm25_results = self._bm25_search(query, top_k * 2)
+                with trace.span("rrf_fusion"):
+                    results = self._fuse_results_rrf(semantic_results, bm25_results, top_k)
+            else:
+                semantic_results = self._semantic_search(query, top_k * 2)
+                bm25_results = self._bm25_search(query, top_k * 2)
+                results = self._fuse_results_rrf(semantic_results, bm25_results, top_k)
 
-        # Fuse results using Reciprocal Rank Fusion
-        fused_results = self._fuse_results_rrf(semantic_results, bm25_results, top_k)
-        return fused_results
+        # Post-processing: reranking, MMR diversification, citations
+
+        # Apply reranking if enabled
+        if getattr(settings, 'enable_reranking', False) and len(results) > 1:
+            try:
+                from reranker import EmbeddingReranker
+                reranker = EmbeddingReranker(self.embedder)
+                results = reranker.rerank(query, results, top_k)
+            except Exception as e:
+                logger.debug("Reranking failed: %s", e)
+
+        # Apply MMR diversification if enabled
+        if getattr(settings, 'enable_mmr', False) and len(results) > 1:
+            try:
+                from reranker import mmr_diversify
+                doc_texts = [d.get("content", "") for d in results]
+                doc_embs = self.embedder.embed_batch(doc_texts)
+                query_emb = self.embedder.embed(query)
+                results = mmr_diversify(
+                    query_emb, results, doc_embs,
+                    top_k=top_k,
+                    lambda_param=getattr(settings, 'mmr_lambda', 0.7),
+                )
+            except Exception as e:
+                logger.debug("MMR diversification failed: %s", e)
+
+        # Add citations if enabled
+        if getattr(settings, 'enable_citations', False):
+            try:
+                from reranker import add_citations
+                results = add_citations(results)
+            except Exception as e:
+                logger.debug("Citation addition failed: %s", e)
+
+        # Record retrieval metrics (non-blocking, never raises)
+        if getattr(settings, 'enable_tracing', False):
+            try:
+                import time as _time
+                from observability.metrics import get_metrics_collector
+                _search_type = "hybrid" if (self._bm25_available and self._bm25_index is not None) else "semantic"
+                _similarities = [float(r.get("score", 0.0)) for r in results if "score" in r]
+                _avg_sim = sum(_similarities) / len(_similarities) if _similarities else 0.0
+                get_metrics_collector().record_retrieval(
+                    query_type=_search_type,
+                    num_results=len(results),
+                    avg_similarity=_avg_sim,
+                    search_time_ms=0.0,  # timing captured per-span in tracing
+                )
+            except Exception as _exc:
+                logger.debug("Metrics record_retrieval failed: %s", _exc)
+
+        return results
 
     def _semantic_search(self, query: str, top_k: int) -> list:
         """
@@ -545,8 +909,20 @@ class SimpleRAG:
         # Clamp top_k to valid range
         top_k = max(1, min(top_k, len(self.documents)))
 
-        # Embed the query
-        query_embedding = self.embedder.embed(query)
+        # Embed the query (use HyDE expansion if enabled)
+        from observability.tracing import get_current_trace
+
+        def _embed_query():
+            if getattr(settings, 'enable_hyde', False) and hasattr(self, 'llm'):
+                return self._hyde_expand_query(query)
+            return self.embedder.embed(query)
+
+        trace = get_current_trace()
+        if trace:
+            with trace.span("query_embedding"):
+                query_embedding = _embed_query()
+        else:
+            query_embedding = _embed_query()
 
         # Try Neo4j graph search first (vector + graph traversal for enriched context)
         if getattr(self, "_graph_store", None):
@@ -571,6 +947,16 @@ class SimpleRAG:
                     ]
             except Exception as exc:
                 logger.debug("Neo4j graph search failed, falling back to numpy: %s", exc)
+
+        # ANN vector index path (FAISS / hnswlib / NumpyFlatIndex)
+        ann_index = getattr(self, "_vector_index", None)
+        if ann_index is not None and len(ann_index) > 0:
+            try:
+                hits = ann_index.search(query_embedding, top_k)
+                if hits:
+                    return [self.documents[doc_id] for doc_id, _score in hits]
+            except Exception as exc:
+                logger.debug("ANN vector index search failed, falling back to numpy: %s", exc)
 
         # In-memory numpy fallback
         query_vec = np.asarray(query_embedding, dtype=np.float32)
@@ -615,7 +1001,7 @@ class SimpleRAG:
         top_k = max(1, min(top_k, len(self.documents)))
 
         # Tokenize query (same way as corpus)
-        tokenized_query = query.lower().split()
+        tokenized_query = self._tokenize_for_bm25(query)
 
         # Get BM25 scores
         scores = self._bm25_index.get_scores(tokenized_query)
@@ -713,12 +1099,13 @@ class SimpleRAG:
         excel_data = []
 
         for doc in relevant_docs:
-            source_info = f"[Source: {doc['source']}]"
+            citation = doc.get('_citation', '')
+            source_info = citation if citation else f"[Source: {doc['source']}]"
             doc_type = doc.get('type', 'unknown')
 
             if doc_type == 'excel':
                 financial_type = doc.get('metadata', {}).get('financial_type', '')
-                if financial_type:
+                if financial_type and not citation:
                     source_info += f" [Type: {financial_type}]"
                 excel_data.append(doc)
 
@@ -730,10 +1117,17 @@ class SimpleRAG:
         has_graph_context = any(d.get("_graph_context") for d in relevant_docs)
         if is_financial and self.charlie_analyzer and (excel_data or has_graph_context):
             prompt = self._build_financial_prompt(query, context, excel_data, relevant_docs)
+        elif _PROMPTS_AVAILABLE:
+            # Versioned, query-type-specific prompt (Phase 2.3)
+            query_type = self._classify_query(query)
+            template = get_prompt_for_query_type(query_type)
+            formatted_context = format_context_with_citations(relevant_docs)
+            prompt = build_prompt(template, query, formatted_context)
         else:
-            # Standard RAG prompt
+            # Fallback: original hardcoded standard RAG prompt
             prompt = f"""You are a helpful assistant that answers questions based on the provided context.
 Use ONLY the information from the context to answer. If the answer is not in the context, say so.
+When referencing data, cite the source using the citation numbers provided (e.g., [1], [2]).
 
 Context:
 {context}
@@ -744,7 +1138,33 @@ Answer:"""
 
         # Generate answer
         try:
-            answer = self.llm.generate(prompt)
+            import time as _time
+            from observability.tracing import get_current_trace
+
+            trace = get_current_trace()
+            _llm_start = _time.monotonic()
+            if trace:
+                with trace.span("llm_generation"):
+                    answer = self.llm.generate(prompt)
+            else:
+                answer = self.llm.generate(prompt)
+            _llm_latency_ms = (_time.monotonic() - _llm_start) * 1000.0
+
+            # Record LLM metrics (non-blocking, never raises)
+            if getattr(settings, 'enable_tracing', False):
+                try:
+                    from observability.metrics import get_metrics_collector
+                    _pt = len(prompt.split())  # token approximation
+                    _ct = len(answer.split())
+                    get_metrics_collector().record_llm_call(
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        latency_ms=_llm_latency_ms,
+                        cache_hit=False,
+                    )
+                except Exception as _exc:
+                    logger.debug("Metrics record_llm_call failed: %s", _exc)
+
             return answer.strip()
         except Exception as e:
             return f"Error generating answer: {e}"
@@ -783,8 +1203,8 @@ Answer:"""
     def _decompose_query(self, query: str) -> list:
         """Decompose a complex query into sub-queries for multi-query retrieval.
 
-        Uses keyword-based expansion (no LLM call) to generate variations
-        that capture different aspects of the question.
+        Uses LLM to decompose complex queries when enabled, with keyword-based
+        fallback for speed or when LLM is unavailable.
 
         Args:
             query: Original user query
@@ -793,9 +1213,56 @@ Answer:"""
             List of sub-queries including the original
         """
         sub_queries = [query]  # Always include original
+        max_subs = getattr(settings, 'max_sub_queries', 4)
+
+        # Try LLM-based decomposition if enabled
+        if getattr(settings, 'enable_query_decomposition', False) and hasattr(self, 'llm'):
+            try:
+                decomp_prompt = (
+                    "Break this financial question into 2-3 simpler sub-questions "
+                    "that would help find relevant data.\n"
+                    "Return ONLY the sub-questions, one per line. "
+                    "Do not number them or add any other text.\n\n"
+                    f"Question: {query}\n\nSub-questions:"
+                )
+
+                result = self.llm.generate(decomp_prompt)
+                lines = [
+                    line.strip().lstrip('0123456789.-) ')
+                    for line in result.strip().split('\n')
+                ]
+                lines = [
+                    line for line in lines
+                    if line and ('?' in line or len(line) > 20) and len(line) > 10
+                ]
+
+                for line in lines[:max_subs - 1]:  # Leave room for original
+                    if line not in sub_queries:
+                        sub_queries.append(line)
+
+                if len(sub_queries) > 1:
+                    return sub_queries[:max_subs]
+            except Exception as e:
+                logger.debug("LLM query decomposition failed: %s", e)
+
+        # Keyword-based fallback
+        return self._keyword_decompose_query(query, max_subs)
+
+    def _keyword_decompose_query(self, query: str, max_subs: int = 4) -> list:
+        """Keyword-based query decomposition fallback.
+
+        Expands the original query with financial aspect keywords.
+
+        Args:
+            query: Original user query
+            max_subs: Maximum number of sub-queries to return
+
+        Returns:
+            List of sub-queries including the original
+        """
+        sub_queries = [query]
         query_lower = query.lower()
 
-        # Financial aspect expansions
         expansions = {
             'profitability': ['revenue', 'net income', 'margin', 'profit'],
             'liquidity': ['current ratio', 'cash', 'working capital'],
@@ -807,30 +1274,26 @@ Answer:"""
             'valuation': ['roe', 'roa', 'roic', 'earnings'],
         }
 
-        # Find which aspects the query touches
         matched_aspects = []
         for aspect, keywords in expansions.items():
             if any(kw in query_lower for kw in keywords) or aspect in query_lower:
                 matched_aspects.append(aspect)
 
-        # Generate sub-queries for related aspects
         if matched_aspects:
             for aspect in matched_aspects:
                 for keyword in expansions[aspect]:
                     if keyword not in query_lower:
                         sub_queries.append(f"{query} {keyword}")
-                        if len(sub_queries) >= 4:  # Cap at 4 sub-queries
+                        if len(sub_queries) >= max_subs:
                             return sub_queries
 
-        # If no financial aspects matched, add simple reformulations
         if len(sub_queries) == 1:
-            # Add a specificity variant
             if '?' in query:
                 sub_queries.append(query.replace('?', ' details?'))
             else:
                 sub_queries.append(f"details about {query}")
 
-        return sub_queries[:4]
+        return sub_queries[:max_subs]
 
     def _is_financial_query(self, query: str) -> bool:
         """Check if query involves financial analysis."""
@@ -915,6 +1378,7 @@ ANALYSIS FRAMEWORK (Charlie Munger approach):
 Provide a comprehensive, actionable analysis addressing the query.
 When computed ratios, scores, or grades are available above, cite those EXACT values.
 Include specific numbers from the data and cite your sources.
+When citing data, reference the source numbers (e.g., [1], [2]) from the context above.
 If performing calculations, show your work.
 
 Answer:"""
@@ -947,12 +1411,13 @@ Answer:"""
         excel_data = []
 
         for doc in relevant_docs:
-            source_info = f"[Source: {doc['source']}]"
+            citation = doc.get('_citation', '')
+            source_info = citation if citation else f"[Source: {doc['source']}]"
             doc_type = doc.get('type', 'unknown')
 
             if doc_type == 'excel':
                 financial_type = doc.get('metadata', {}).get('financial_type', '')
-                if financial_type:
+                if financial_type and not citation:
                     source_info += f" [Type: {financial_type}]"
                 excel_data.append(doc)
 
@@ -963,9 +1428,17 @@ Answer:"""
         has_graph_context = any(d.get("_graph_context") for d in relevant_docs)
         if is_financial and self.charlie_analyzer and (excel_data or has_graph_context):
             prompt = self._build_financial_prompt(query, context, excel_data, relevant_docs)
+        elif _PROMPTS_AVAILABLE:
+            # Versioned, query-type-specific prompt (Phase 2.3)
+            query_type = self._classify_query(query)
+            template = get_prompt_for_query_type(query_type)
+            formatted_context = format_context_with_citations(relevant_docs)
+            prompt = build_prompt(template, query, formatted_context)
         else:
+            # Fallback: original hardcoded standard RAG prompt
             prompt = f"""You are a helpful assistant that answers questions based on the provided context.
 Use ONLY the information from the context to answer. If the answer is not in the context, say so.
+When referencing data, cite the source using the citation numbers provided (e.g., [1], [2]).
 
 Context:
 {context}

@@ -279,14 +279,24 @@ class LocalLLM:
     def _raw_generate_stream(self, prompt: str):
         """Raw streaming Ollama call without circuit breaker wrappers."""
         try:
+            last_chunk = {}
             for chunk in ollama.generate(
                 model=self.model,
                 prompt=prompt,
                 stream=True,
             ):
+                last_chunk = chunk
                 text = chunk.get("response", "")
                 if text:
                     yield text
+            # Record token counts from the final chunk if trace is active
+            from observability.tracing import get_current_trace
+
+            trace = get_current_trace()
+            if trace is not None and last_chunk:
+                prompt_tokens = last_chunk.get("prompt_eval_count", 0) or 0
+                completion_tokens = last_chunk.get("eval_count", 0) or 0
+                trace.add_token_counts(prompt_tokens, completion_tokens)
         except ConnectionError as e:
             raise LLMConnectionError(
                 "Cannot connect to Ollama. Is it running? (`ollama serve`)"
@@ -345,6 +355,14 @@ class LocalLLM:
                 model=self.model,
                 prompt=prompt,
             )
+            # Record token counts if trace is active
+            from observability.tracing import get_current_trace
+
+            trace = get_current_trace()
+            if trace is not None:
+                prompt_tokens = response.get("prompt_eval_count", 0) or 0
+                completion_tokens = response.get("eval_count", 0) or 0
+                trace.add_token_counts(prompt_tokens, completion_tokens)
             return response.get("response", "")
         except ConnectionError as e:
             raise LLMConnectionError(
