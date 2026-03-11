@@ -35,7 +35,9 @@ def check_model_available(model_name: str, host: str | None = None) -> Dict[str,
         else:
             models = ollama.list()
 
-        model_names = [m.get("name", "") for m in models.get("models", [])]
+        # ollama client returns Model objects with .model attr (not dicts)
+        raw_models = getattr(models, "models", None) or models.get("models", [])
+        model_names = [getattr(m, "model", None) or m.get("name", "") for m in raw_models]
         # Match with or without tag
         if any(model_name in name for name in model_names):
             return {"status": "ok", "detail": f"Model '{model_name}' is available"}

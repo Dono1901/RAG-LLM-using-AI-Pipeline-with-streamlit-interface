@@ -31,8 +31,9 @@ WORKDIR /app
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application code
+# Copy application code (top-level modules + subdirectory packages)
 COPY *.py ./
+COPY observability/ ./observability/
 
 # Create directories with correct permissions
 RUN mkdir -p /app/documents /app/.cache /app/.streamlit && \

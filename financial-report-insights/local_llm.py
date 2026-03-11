@@ -290,13 +290,16 @@ class LocalLLM:
                 if text:
                     yield text
             # Record token counts from the final chunk if trace is active
-            from observability.tracing import get_current_trace
+            try:
+                from observability.tracing import get_current_trace
 
-            trace = get_current_trace()
-            if trace is not None and last_chunk:
-                prompt_tokens = last_chunk.get("prompt_eval_count", 0) or 0
-                completion_tokens = last_chunk.get("eval_count", 0) or 0
-                trace.add_token_counts(prompt_tokens, completion_tokens)
+                trace = get_current_trace()
+                if trace is not None and last_chunk:
+                    prompt_tokens = last_chunk.get("prompt_eval_count", 0) or 0
+                    completion_tokens = last_chunk.get("eval_count", 0) or 0
+                    trace.add_token_counts(prompt_tokens, completion_tokens)
+            except ImportError:
+                pass
         except ConnectionError as e:
             raise LLMConnectionError(
                 "Cannot connect to Ollama. Is it running? (`ollama serve`)"
@@ -356,13 +359,16 @@ class LocalLLM:
                 prompt=prompt,
             )
             # Record token counts if trace is active
-            from observability.tracing import get_current_trace
+            try:
+                from observability.tracing import get_current_trace
 
-            trace = get_current_trace()
-            if trace is not None:
-                prompt_tokens = response.get("prompt_eval_count", 0) or 0
-                completion_tokens = response.get("eval_count", 0) or 0
-                trace.add_token_counts(prompt_tokens, completion_tokens)
+                trace = get_current_trace()
+                if trace is not None:
+                    prompt_tokens = response.get("prompt_eval_count", 0) or 0
+                    completion_tokens = response.get("eval_count", 0) or 0
+                    trace.add_token_counts(prompt_tokens, completion_tokens)
+            except ImportError:
+                pass
             return response.get("response", "")
         except ConnectionError as e:
             raise LLMConnectionError(
@@ -432,6 +438,28 @@ class LocalEmbedder:
 
     def _request_embeddings(self, texts: list) -> list:
         """Call the OpenAI-compatible embeddings endpoint."""
+        # mxbai-embed-large via DMR: ~512 token context per text, ~4K total batch tokens
+        max_chars = 2500
+        max_batch_chars = 3000
+        safe_texts = [t[:max_chars] if len(t) > max_chars else t for t in texts]
+        # Adaptive batching: group texts until total chars approaches limit
+        all_embeddings = []
+        batch: list = []
+        batch_chars = 0
+        for t in safe_texts:
+            t_len = len(t)
+            if batch and batch_chars + t_len > max_batch_chars:
+                all_embeddings.extend(self._send_embedding_batch(batch))
+                batch = []
+                batch_chars = 0
+            batch.append(t)
+            batch_chars += t_len
+        if batch:
+            all_embeddings.extend(self._send_embedding_batch(batch))
+        return all_embeddings
+
+    def _send_embedding_batch(self, texts: list) -> list:
+        """Send a batch of texts to the embedding endpoint."""
         resp = self._client.post(self._url, json={
             "model": self.model_name,
             "input": texts,
