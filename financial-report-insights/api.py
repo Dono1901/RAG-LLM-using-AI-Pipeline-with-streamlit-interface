@@ -72,6 +72,9 @@ class DocumentInfo(BaseModel):
     source: str
     type: str
     content_preview: str
+    section_type: Optional[str] = None
+    chunk_level: Optional[str] = None
+    has_parent: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +833,7 @@ async def compliance_regulatory(req: AnalyzeRequest):
 
 @app.get("/documents", response_model=List[DocumentInfo])
 async def list_documents():
-    """List indexed document chunks."""
+    """List indexed document chunks with pipeline metadata."""
     rag = _get_rag()
     results = []
     seen = set()
@@ -839,9 +842,15 @@ async def list_documents():
         if source in seen:
             continue
         seen.add(source)
+        meta = doc.get("metadata", {})
+        if not isinstance(meta, dict):
+            meta = {}
         results.append(DocumentInfo(
             source=source,
             type=doc.get("type", "unknown"),
             content_preview=doc.get("content", "")[:200],
+            section_type=meta.get("section_type"),
+            chunk_level=meta.get("chunk_level"),
+            has_parent=bool(meta.get("parent_id")),
         ))
     return results

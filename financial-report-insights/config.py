@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     mmr_lambda: float = 0.7  # MMR diversity parameter (1.0 = pure relevance, 0.0 = pure diversity)
     enable_mmr: bool = True  # Maximal Marginal Relevance diversification
     enable_citations: bool = True  # Citation tracking in responses
+    enable_parent_expansion: bool = True  # Expand child chunks to parent text for LLM context
 
     # Semantic cache (Phase 4.3)
     semantic_cache_threshold: float = 0.95

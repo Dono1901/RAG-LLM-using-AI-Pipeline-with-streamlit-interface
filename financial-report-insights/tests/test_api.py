@@ -249,6 +249,38 @@ class TestDocumentsEndpoint:
         docs = resp.json()
         assert len(docs) == 2
 
+    def test_documents_pipeline_metadata(self, client, mock_rag):
+        """Pipeline-ingested docs should expose section_type and chunk_level."""
+        mock_rag.documents = [
+            {
+                "source": "report.pdf",
+                "type": "pdf",
+                "content": "Revenue data...",
+                "metadata": {
+                    "section_type": "income_statement",
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                },
+            },
+        ]
+        resp = client.get("/documents")
+        docs = resp.json()
+        assert len(docs) == 1
+        assert docs[0]["section_type"] == "income_statement"
+        assert docs[0]["chunk_level"] == "child"
+        assert docs[0]["has_parent"] is True
+
+    def test_documents_no_metadata(self, client, mock_rag):
+        """Legacy docs without metadata should have null section fields."""
+        mock_rag.documents = [
+            {"source": "old.txt", "type": "text", "content": "Plain text."},
+        ]
+        resp = client.get("/documents")
+        docs = resp.json()
+        assert docs[0]["section_type"] is None
+        assert docs[0]["chunk_level"] is None
+        assert docs[0]["has_parent"] is False
+
 
 # ---------------------------------------------------------------------------
 # Rate limiting

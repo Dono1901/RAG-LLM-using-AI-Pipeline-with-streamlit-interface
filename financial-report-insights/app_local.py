@@ -378,8 +378,21 @@ class SimpleRAG:
         return None
 
     def _load_documents(self):
-        """Load and process documents from the docs folder (PDF, TXT, MD, Excel, CSV)."""
+        """Load and process documents from the docs folder (PDF, TXT, MD, Excel, CSV).
+
+        Uses the ingestion pipeline for financial-aware chunking with
+        parent-child strategy, section detection, and NL descriptions.
+        Falls back to legacy chunking if the pipeline is unavailable.
+        """
         logger.info(f"Loading documents from {self.docs_folder}")
+
+        # Try to use the new ingestion pipeline
+        try:
+            from ingestion_pipeline import ingest_file, chunks_to_documents
+            _pipeline_available = True
+        except ImportError:
+            _pipeline_available = False
+            logger.info("Ingestion pipeline not available, using legacy chunking")
 
         for file_path in self.docs_folder.rglob("*"):
             if not file_path.is_file():
@@ -405,7 +418,20 @@ class SimpleRAG:
 
                 file_docs: List[Dict[str, Any]] = []
 
-                if suffix in (".pdf", ".txt", ".md", ".docx"):
+                # Use new ingestion pipeline when available
+                if _pipeline_available and suffix in (
+                    ".pdf", ".txt", ".md", ".docx",
+                    ".xlsx", ".xlsm", ".xls", ".csv", ".tsv",
+                ):
+                    rag_chunks = ingest_file(file_path)
+                    file_docs = chunks_to_documents(rag_chunks)
+                    if file_docs:
+                        logger.info(
+                            "Ingested %d chunks from %s via pipeline",
+                            len(file_docs), file_path.name,
+                        )
+                # Legacy fallback for text files
+                elif suffix in (".pdf", ".txt", ".md", ".docx"):
                     text = self._extract_text(file_path)
                     if text:
                         if suffix == ".docx":
@@ -428,7 +454,7 @@ class SimpleRAG:
                                 "type": doc_type,
                             })
                         logger.info(f"Loaded {len(chunks)} chunks from {rel_path}")
-
+                # Legacy fallback for Excel
                 elif suffix in self.EXCEL_EXTENSIONS:
                     excel_docs = self._process_excel_file(file_path)
                     file_docs.extend(excel_docs)
@@ -871,6 +897,10 @@ class SimpleRAG:
             except Exception as e:
                 logger.debug("Citation addition failed: %s", e)
 
+        # Parent chunk expansion: swap child content with parent text for LLM context
+        if getattr(settings, 'enable_parent_expansion', True) and results:
+            results = self._expand_parent_chunks(results)
+
         # Record retrieval metrics (non-blocking, never raises)
         if getattr(settings, 'enable_tracing', False):
             try:
@@ -889,6 +919,44 @@ class SimpleRAG:
                 logger.debug("Metrics record_retrieval failed: %s", _exc)
 
         return results
+
+    def _expand_parent_chunks(self, results: list) -> list:
+        """Expand child chunks to include parent text for richer LLM context.
+
+        When the ingestion pipeline produces parent-child chunks, child chunks
+        are small (250 tokens) for precise retrieval, but the parent text
+        (1200 tokens) provides better context for the LLM.
+
+        This method replaces the child's content with its parent text while
+        preserving the original child content in metadata for reference.
+        Deduplicates by parent_id so the LLM doesn't see the same parent twice.
+        """
+        expanded = []
+        seen_parents = set()
+
+        for doc in results:
+            meta = doc.get("metadata", {})
+            if not isinstance(meta, dict):
+                expanded.append(doc)
+                continue
+
+            parent_id = meta.get("parent_id")
+            parent_text = meta.get("parent_text")
+            chunk_level = meta.get("chunk_level")
+
+            # Only expand child chunks that have parent text
+            if chunk_level == "child" and parent_text and parent_id:
+                if parent_id in seen_parents:
+                    continue  # Skip duplicate parent
+                seen_parents.add(parent_id)
+                expanded_doc = doc.copy()
+                expanded_doc["_child_content"] = doc.get("content", "")
+                expanded_doc["content"] = parent_text
+                expanded.append(expanded_doc)
+            else:
+                expanded.append(doc)
+
+        return expanded
 
     def _semantic_search(self, query: str, top_k: int) -> list:
         """

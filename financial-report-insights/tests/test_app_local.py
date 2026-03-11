@@ -799,6 +799,140 @@ class TestGetFinancialAnalysisContext:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _expand_parent_chunks
+# ---------------------------------------------------------------------------
+
+
+class TestExpandParentChunks:
+    def test_child_expanded_to_parent(self, rag_empty):
+        """Child chunks should have content replaced with parent_text."""
+        docs = [
+            {
+                "content": "child chunk text",
+                "source": "test.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                    "parent_text": "full parent text with more context",
+                },
+            }
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 1
+        assert result[0]["content"] == "full parent text with more context"
+        assert result[0]["_child_content"] == "child chunk text"
+
+    def test_parent_chunk_unchanged(self, rag_empty):
+        """Parent-level chunks should pass through unchanged."""
+        docs = [
+            {
+                "content": "parent chunk text",
+                "source": "test.pdf",
+                "metadata": {"chunk_level": "parent"},
+            }
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 1
+        assert result[0]["content"] == "parent chunk text"
+
+    def test_dedup_by_parent_id(self, rag_empty):
+        """Multiple children from same parent should be deduped."""
+        docs = [
+            {
+                "content": "child 1",
+                "source": "test.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                    "parent_text": "shared parent",
+                },
+            },
+            {
+                "content": "child 2",
+                "source": "test.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                    "parent_text": "shared parent",
+                },
+            },
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 1
+
+    def test_different_parents_kept(self, rag_empty):
+        """Children from different parents should both appear."""
+        docs = [
+            {
+                "content": "child 1",
+                "source": "test.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                    "parent_text": "parent one",
+                },
+            },
+            {
+                "content": "child 2",
+                "source": "test.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p2",
+                    "parent_text": "parent two",
+                },
+            },
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 2
+
+    def test_no_metadata(self, rag_empty):
+        """Docs without metadata pass through."""
+        docs = [{"content": "plain doc", "source": "test.txt"}]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 1
+        assert result[0]["content"] == "plain doc"
+
+    def test_child_without_parent_text(self, rag_empty):
+        """Child without parent_text passes through unchanged."""
+        docs = [
+            {
+                "content": "orphan child",
+                "source": "test.pdf",
+                "metadata": {"chunk_level": "child", "parent_id": "p1"},
+            }
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 1
+        assert result[0]["content"] == "orphan child"
+
+    def test_mixed_children_and_non_pipeline(self, rag_empty):
+        """Mix of pipeline children and legacy docs."""
+        docs = [
+            {"content": "legacy doc", "source": "old.txt", "metadata": {}},
+            {
+                "content": "child",
+                "source": "new.pdf",
+                "metadata": {
+                    "chunk_level": "child",
+                    "parent_id": "p1",
+                    "parent_text": "expanded parent",
+                },
+            },
+            {"content": "table chunk", "source": "data.xlsx",
+             "metadata": {"chunk_level": "atomic_table"}},
+        ]
+        result = rag_empty._expand_parent_chunks(docs)
+        assert len(result) == 3
+        assert result[0]["content"] == "legacy doc"
+        assert result[1]["content"] == "expanded parent"
+        assert result[2]["content"] == "table chunk"
+
+    def test_empty_list(self, rag_empty):
+        result = rag_empty._expand_parent_chunks([])
+        assert result == []
+
+
 class TestLoadDocumentsFileSizeLimit:
     def test_skips_oversized_file(self, tmp_path):
         from app_local import SimpleRAG
