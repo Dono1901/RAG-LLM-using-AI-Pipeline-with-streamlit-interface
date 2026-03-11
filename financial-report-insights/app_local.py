@@ -163,7 +163,7 @@ class SimpleRAG:
 
         # Wait for embedding service before loading docs (handles cold start)
         if hasattr(self.embedder, 'wait_for_embedding_service'):
-            if not self.embedder.wait_for_embedding_service(timeout=60):
+            if not self.embedder.wait_for_embedding_service(timeout=120):
                 logger.error("Embedding service unavailable — documents may not be indexed")
 
         # Load documents on init
@@ -399,9 +399,14 @@ class SimpleRAG:
             _pipeline_available = False
             logger.info("Ingestion pipeline not available, using legacy chunking")
 
-        for file_path in self.docs_folder.rglob("*"):
-            if not file_path.is_file():
-                continue
+        # Staggered ingestion: process small files (PDFs) before large Excel
+        # files so the embedding service warms up naturally on smaller payloads.
+        all_files = sorted(
+            (f for f in self.docs_folder.rglob("*") if f.is_file()),
+            key=lambda p: p.stat().st_size,
+        )
+
+        for file_path in all_files:
             file_size = file_path.stat().st_size
             if file_size > settings.max_file_size_mb * 1024 * 1024:
                 logger.warning(
@@ -482,28 +487,46 @@ class SimpleRAG:
                         )
 
             except Exception as e:
-                # Self-healing: retry once after a brief delay
-                logger.warning(f"First load attempt failed for {file_path}: {e}. Retrying...")
+                # Self-healing: exponential backoff retries (3s, 6s, 12s)
+                # to handle DMR cold-start 5xx errors on large Excel batches.
                 import time as _time
-                _time.sleep(3)
-                try:
-                    # Retry the embedding step only (file_docs may already be populated)
-                    if file_docs and not any(
-                        d.get("source") == str(file_path.relative_to(self.docs_folder))
-                        for d in self.documents
-                    ):
-                        texts = [d["content"] for d in file_docs]
-                        embs = self.embedder.embed_batch(texts)
-                        self._save_cached_embeddings(
-                            self._embedding_cache_key(file_path), file_docs, embs,
-                        )
-                        self.documents.extend(file_docs)
-                        self.embeddings.extend(embs)
-                        logger.info(f"Retry succeeded for {file_path.name}")
-                    else:
-                        logger.error(f"Failed to load {file_path} after retry: {e}")
-                except Exception as retry_err:
-                    logger.error(f"Failed to load {file_path} after retry: {retry_err}")
+                _per_file_delays = [3, 6, 12]
+                _last_err: Exception | None = e
+                for _retry_num, _delay in enumerate(_per_file_delays, start=1):
+                    logger.warning(
+                        "Load failed for %s (retry %d/%d in %ds): %s",
+                        file_path.name, _retry_num, len(_per_file_delays), _delay, e,
+                    )
+                    _time.sleep(_delay)
+                    try:
+                        if file_docs and not any(
+                            d.get("source") == str(
+                                file_path.relative_to(self.docs_folder))
+                            for d in self.documents
+                        ):
+                            texts = [d["content"] for d in file_docs]
+                            embs = self.embedder.embed_batch(texts)
+                            self._save_cached_embeddings(
+                                self._embedding_cache_key(file_path), file_docs, embs,
+                            )
+                            self.documents.extend(file_docs)
+                            self.embeddings.extend(embs)
+                            logger.info(
+                                "Retry %d succeeded for %s",
+                                _retry_num, file_path.name,
+                            )
+                            _last_err = None
+                            break
+                        else:
+                            _last_err = None
+                            break
+                    except Exception as retry_err:
+                        _last_err = retry_err
+                if _last_err is not None:
+                    logger.error(
+                        "Failed to load %s after %d retries: %s",
+                        file_path.name, len(_per_file_delays), _last_err,
+                    )
 
         # Chunk count validation: warn if suspiciously few chunks indexed
         doc_files = [f for f in self.docs_folder.rglob("*") if f.is_file()]

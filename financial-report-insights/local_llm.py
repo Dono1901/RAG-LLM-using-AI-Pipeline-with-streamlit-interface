@@ -441,28 +441,47 @@ class LocalEmbedder:
         # mxbai-embed-large via DMR: ~512 token context per text, ~4K total batch tokens
         max_chars = 2500
         max_batch_chars = 3000
+        # Item-count cap from config (default 32) prevents unbounded batch sizes
+        try:
+            from config import settings as _cfg
+            max_batch_items = _cfg.embedding_batch_size
+        except (ImportError, AttributeError):
+            max_batch_items = 32
         safe_texts = [t[:max_chars] if len(t) > max_chars else t for t in texts]
-        # Adaptive batching: group texts until total chars approaches limit
+        # Use extended retry budget for large ingestion jobs (100+ chunks)
+        large_batch = len(texts) >= 100
+        # Adaptive batching: group texts until char or item limit reached
         all_embeddings = []
         batch: list = []
         batch_chars = 0
         for t in safe_texts:
             t_len = len(t)
-            if batch and batch_chars + t_len > max_batch_chars:
-                all_embeddings.extend(self._send_embedding_batch(batch))
+            if batch and (batch_chars + t_len > max_batch_chars
+                          or len(batch) >= max_batch_items):
+                all_embeddings.extend(
+                    self._send_embedding_batch(batch, large_batch=large_batch))
                 batch = []
                 batch_chars = 0
             batch.append(t)
             batch_chars += t_len
         if batch:
-            all_embeddings.extend(self._send_embedding_batch(batch))
+            all_embeddings.extend(
+                self._send_embedding_batch(batch, large_batch=large_batch))
         return all_embeddings
 
-    def _send_embedding_batch(self, texts: list, max_retries: int = 3) -> list:
-        """Send a batch of texts to the embedding endpoint with retry on 5xx."""
+    def _send_embedding_batch(
+        self, texts: list, max_retries: int = 3, large_batch: bool = False,
+    ) -> list:
+        """Send a batch of texts to the embedding endpoint with retry on 5xx.
+
+        When large_batch is True, uses 5 retries with longer backoff (2s, 4s,
+        8s, 16s) to tolerate DMR GPU warm-up latency during cold start.
+        """
         import time
         import httpx
 
+        if large_batch:
+            max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
                 resp = self._client.post(self._url, json={
@@ -474,32 +493,56 @@ class LocalEmbedder:
                 return [item["embedding"] for item in data["data"]]
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500 and attempt < max_retries:
-                    wait = 2 ** attempt  # 2s, 4s
+                    wait = 2 ** attempt  # 2s, 4s, 8s, 16s
                     logger.warning(
-                        "Embedding 5xx error (attempt %d/%d), retrying in %ds: %s",
-                        attempt, max_retries, wait, e,
+                        "Embedding 5xx error (attempt %d/%d, batch=%d texts), "
+                        "retrying in %ds: %s",
+                        attempt, max_retries, len(texts), wait, e,
                     )
                     time.sleep(wait)
                     continue
                 raise
 
-    def wait_for_embedding_service(self, timeout: int = 60) -> bool:
-        """Wait for the embedding service to be ready (handles cold start).
+    def wait_for_embedding_service(self, timeout: int = 120) -> bool:
+        """Wait for embedding service with graduated warm-up.
 
-        Returns True if service responds, False if timeout exceeded.
+        Sends progressively larger batches (1, 5, 20 texts) to prime the
+        model's GPU/memory before document ingestion begins.  This reduces
+        cold-start 5xx failures when large Excel batches follow startup.
+
+        Returns True if warm-up succeeds, False if timeout exceeded.
         """
         import time
 
+        warmup_stages = [
+            (1,  "stage 1/3: single text"),
+            (5,  "stage 2/3: 5 texts"),
+            (20, "stage 3/3: 20 texts"),
+        ]
+
         start = time.monotonic()
-        while time.monotonic() - start < timeout:
-            try:
-                self._send_embedding_batch(["warmup"], max_retries=1)
-                return True
-            except Exception:
-                logger.info("Waiting for embedding service to be ready...")
-                time.sleep(2)
-        logger.error("Embedding service not ready after %ds", timeout)
-        return False
+        for count, label in warmup_stages:
+            stage_texts = [f"warmup financial data row {i}" for i in range(count)]
+            stage_ok = False
+            while time.monotonic() - start < timeout:
+                try:
+                    self._send_embedding_batch(stage_texts, max_retries=1)
+                    logger.info("Embedding warm-up %s succeeded", label)
+                    stage_ok = True
+                    break
+                except Exception:
+                    logger.info("Waiting for embedding service (%s)...", label)
+                    time.sleep(2)
+            if not stage_ok:
+                logger.error(
+                    "Embedding service not ready after %ds (failed at %s)",
+                    timeout, label,
+                )
+                return False
+
+        elapsed = time.monotonic() - start
+        logger.info("Embedding service fully warmed up in %.1fs", elapsed)
+        return True
 
     def embed(self, text: str) -> list:
         """
