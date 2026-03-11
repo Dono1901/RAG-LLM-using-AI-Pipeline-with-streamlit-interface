@@ -100,6 +100,24 @@ def check_cache_folders() -> Dict[str, str]:
     return {"status": "ok", "detail": "Cache folders ready"}
 
 
+def check_config_valid() -> Dict[str, str]:
+    """Validate application configuration and return status."""
+    from config import validate_settings
+
+    errors, warnings = validate_settings()
+    if errors:
+        return {
+            "status": "error",
+            "detail": f"Config errors: {'; '.join(errors)}",
+        }
+    if warnings:
+        return {
+            "status": "warning",
+            "detail": f"Config warnings: {'; '.join(warnings)}",
+        }
+    return {"status": "ok", "detail": "Configuration valid"}
+
+
 def run_preflight_checks() -> List[Dict[str, str]]:
     """Run all startup validation checks. Returns list of check results."""
     from config import settings
@@ -107,6 +125,7 @@ def run_preflight_checks() -> List[Dict[str, str]]:
     ollama_host = os.environ.get("OLLAMA_HOST")
 
     checks = [
+        ("config_valid", check_config_valid()),
         ("ollama_connection", check_ollama_connection(ollama_host)),
         ("model_available", check_model_available(settings.llm_model, ollama_host)),
         ("documents_folder", check_documents_folder()),

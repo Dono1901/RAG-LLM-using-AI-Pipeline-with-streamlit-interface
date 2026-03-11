@@ -66,7 +66,17 @@ def _sanitize_and_save(file, docs_path: Path) -> bool:
 
 @st.cache_resource
 def load_rag_system():
-    """Load the RAG system (cached)."""
+    """Load the RAG system (cached). Validates config first."""
+    from config import validate_settings
+
+    errors, warnings = validate_settings()
+    for w in warnings:
+        st.warning(f"Config warning: {w}")
+    if errors:
+        for e in errors:
+            st.error(f"Config error: {e}")
+        st.stop()
+
     from app_local import SimpleRAG
     return SimpleRAG(
         docs_folder="./documents",

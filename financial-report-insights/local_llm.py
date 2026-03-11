@@ -458,15 +458,48 @@ class LocalEmbedder:
             all_embeddings.extend(self._send_embedding_batch(batch))
         return all_embeddings
 
-    def _send_embedding_batch(self, texts: list) -> list:
-        """Send a batch of texts to the embedding endpoint."""
-        resp = self._client.post(self._url, json={
-            "model": self.model_name,
-            "input": texts,
-        })
-        resp.raise_for_status()
-        data = resp.json()
-        return [item["embedding"] for item in data["data"]]
+    def _send_embedding_batch(self, texts: list, max_retries: int = 3) -> list:
+        """Send a batch of texts to the embedding endpoint with retry on 5xx."""
+        import time
+        import httpx
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = self._client.post(self._url, json={
+                    "model": self.model_name,
+                    "input": texts,
+                })
+                resp.raise_for_status()
+                data = resp.json()
+                return [item["embedding"] for item in data["data"]]
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500 and attempt < max_retries:
+                    wait = 2 ** attempt  # 2s, 4s
+                    logger.warning(
+                        "Embedding 5xx error (attempt %d/%d), retrying in %ds: %s",
+                        attempt, max_retries, wait, e,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise
+
+    def wait_for_embedding_service(self, timeout: int = 60) -> bool:
+        """Wait for the embedding service to be ready (handles cold start).
+
+        Returns True if service responds, False if timeout exceeded.
+        """
+        import time
+
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            try:
+                self._send_embedding_batch(["warmup"], max_retries=1)
+                return True
+            except Exception:
+                logger.info("Waiting for embedding service to be ready...")
+                time.sleep(2)
+        logger.error("Embedding service not ready after %ds", timeout)
+        return False
 
     def embed(self, text: str) -> list:
         """

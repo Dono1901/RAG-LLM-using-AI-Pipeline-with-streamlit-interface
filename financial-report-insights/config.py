@@ -3,13 +3,25 @@ Centralized configuration for the RAG-LLM Financial system.
 All hardcoded values are collected here with environment variable overrides.
 """
 
+import logging
+import os
 from pathlib import Path
+from typing import Tuple
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
+logger = logging.getLogger(__name__)
+
 # Load ALL env vars from .env (including OLLAMA_HOST for the ollama client)
 _ENV_FILE = Path(__file__).parent / ".env"
+if not _ENV_FILE.exists():
+    logger.warning(
+        ".env file not found at %s — using defaults. "
+        "Copy .env.example to .env for custom configuration.",
+        _ENV_FILE,
+    )
 load_dotenv(_ENV_FILE)
 
 
@@ -116,3 +128,50 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_settings(s: Settings | None = None) -> Tuple[list[str], list[str]]:
+    """Validate settings and return (errors, warnings). Empty errors = valid."""
+    if s is None:
+        s = settings
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # --- OLLAMA_HOST URL validation (mirrors LocalEmbedder check) ---
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    parsed = urlparse(ollama_host)
+    if parsed.scheme not in ("http", "https"):
+        errors.append(
+            f"OLLAMA_HOST scheme must be http or https, got: {parsed.scheme!r}"
+        )
+
+    # --- Neo4j consistency ---
+    neo4j_uri = os.environ.get("NEO4J_URI", "").strip()
+    neo4j_pass = os.environ.get("NEO4J_PASSWORD", "").strip()
+    if neo4j_uri and not neo4j_pass:
+        errors.append("NEO4J_URI is set but NEO4J_PASSWORD is empty")
+
+    # --- Range validation ---
+    if not (100 <= s.chunk_size <= 5000):
+        errors.append(f"chunk_size must be 100-5000, got {s.chunk_size}")
+    if s.chunk_overlap >= s.chunk_size:
+        errors.append(
+            f"chunk_overlap ({s.chunk_overlap}) must be < chunk_size ({s.chunk_size})"
+        )
+    if not (1 <= s.top_k <= s.max_top_k):
+        errors.append(f"top_k must be 1-{s.max_top_k}, got {s.top_k}")
+    if s.llm_timeout_seconds < 10:
+        errors.append(
+            f"llm_timeout_seconds too low: {s.llm_timeout_seconds} (min 10)"
+        )
+    if s.embedding_dimension not in (0, 384, 768, 1024):
+        warnings.append(f"Unusual embedding_dimension: {s.embedding_dimension}")
+    if s.max_file_size_mb > 500:
+        warnings.append(f"max_file_size_mb is very large: {s.max_file_size_mb}")
+    if s.bm25_weight + s.semantic_weight != 1.0:
+        warnings.append(
+            f"bm25_weight + semantic_weight = {s.bm25_weight + s.semantic_weight} "
+            f"(expected 1.0)"
+        )
+
+    return errors, warnings

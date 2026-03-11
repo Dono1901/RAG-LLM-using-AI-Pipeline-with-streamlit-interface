@@ -161,6 +161,11 @@ class SimpleRAG:
         self._cache_dir = Path(settings.embedding_cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Wait for embedding service before loading docs (handles cold start)
+        if hasattr(self.embedder, 'wait_for_embedding_service'):
+            if not self.embedder.wait_for_embedding_service(timeout=60):
+                logger.error("Embedding service unavailable — documents may not be indexed")
+
         # Load documents on init
         self._load_documents()
 
@@ -477,7 +482,39 @@ class SimpleRAG:
                         )
 
             except Exception as e:
-                logger.warning(f"Failed to load {file_path}: {e}")
+                # Self-healing: retry once after a brief delay
+                logger.warning(f"First load attempt failed for {file_path}: {e}. Retrying...")
+                import time as _time
+                _time.sleep(3)
+                try:
+                    # Retry the embedding step only (file_docs may already be populated)
+                    if file_docs and not any(
+                        d.get("source") == str(file_path.relative_to(self.docs_folder))
+                        for d in self.documents
+                    ):
+                        texts = [d["content"] for d in file_docs]
+                        embs = self.embedder.embed_batch(texts)
+                        self._save_cached_embeddings(
+                            self._embedding_cache_key(file_path), file_docs, embs,
+                        )
+                        self.documents.extend(file_docs)
+                        self.embeddings.extend(embs)
+                        logger.info(f"Retry succeeded for {file_path.name}")
+                    else:
+                        logger.error(f"Failed to load {file_path} after retry: {e}")
+                except Exception as retry_err:
+                    logger.error(f"Failed to load {file_path} after retry: {retry_err}")
+
+        # Chunk count validation: warn if suspiciously few chunks indexed
+        doc_files = [f for f in self.docs_folder.rglob("*") if f.is_file()]
+        n_files = len(doc_files)
+        n_chunks = len(self.documents)
+        if n_files > 0 and n_chunks < n_files * 5:
+            logger.warning(
+                "Only %d chunks indexed from %d files (expected >%d). "
+                "Some embeddings may have failed. Consider restarting to re-ingest.",
+                n_chunks, n_files, n_files * 5,
+            )
 
         if self.documents:
             logger.info(f"Total: {len(self.documents)} chunks indexed")

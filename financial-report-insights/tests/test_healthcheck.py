@@ -191,6 +191,7 @@ class TestRunPreflightChecks:
         from healthcheck import run_preflight_checks
 
         with (
+            patch("healthcheck.check_config_valid", return_value={"status": "ok", "detail": "ok"}),
             patch("healthcheck.check_ollama_connection", return_value={"status": "ok", "detail": "ok"}),
             patch("healthcheck.check_model_available", return_value={"status": "ok", "detail": "ok"}),
             patch("healthcheck.check_documents_folder", return_value={"status": "ok", "detail": "ok"}),
@@ -198,7 +199,7 @@ class TestRunPreflightChecks:
             patch("healthcheck.check_neo4j_connection", return_value={"status": "ok", "detail": "ok"}),
         ):
             results = run_preflight_checks()
-        assert len(results) == 5
+        assert len(results) == 6
         assert all(r["status"] == "ok" for r in results)
         assert all("check" in r for r in results)
 

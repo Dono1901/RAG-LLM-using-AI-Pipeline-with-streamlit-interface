@@ -105,6 +105,16 @@ def _get_rag():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI starting up")
+    from config import validate_settings
+    errors, warnings = validate_settings()
+    for w in warnings:
+        logger.warning("[config] %s", w)
+    if errors:
+        for e in errors:
+            logger.error("[config] %s", e)
+        raise RuntimeError(
+            f"Configuration validation failed: {'; '.join(errors)}"
+        )
     yield
     logger.info("FastAPI shutting down")
 
