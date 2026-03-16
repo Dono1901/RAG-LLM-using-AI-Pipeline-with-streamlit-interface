@@ -233,7 +233,11 @@ async def query(req: QueryRequest):
             document_count=len(relevant_docs),
         )
     except LLMConnectionError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        logger.warning("LLM query failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="LLM service temporarily unavailable.",
+        ) from exc
 
 
 @app.post("/query-stream")
@@ -265,7 +269,8 @@ async def query_stream(req: QueryRequest):
                 yield {"data": chunk}
             yield {"event": "done", "data": ""}
         except LLMConnectionError as exc:
-            yield {"event": "error", "data": str(exc)}
+            logger.warning("LLM streaming failed: %s", exc)
+            yield {"event": "error", "data": "LLM service temporarily unavailable."}
 
     return EventSourceResponse(event_generator())
 

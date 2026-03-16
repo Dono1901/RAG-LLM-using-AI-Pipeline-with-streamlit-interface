@@ -250,7 +250,7 @@ class TestStoreCreditAssessment:
         self, store, mock_driver, sample_scorecard, sample_debt_capacity
     ):
         _, session = mock_driver
-        session.run.side_effect = Exception("Neo4j unavailable")
+        session.run.side_effect = ConnectionError("Neo4j unavailable")
         result = store.store_credit_assessment("Acme Corp", sample_scorecard, sample_debt_capacity)
         assert result is None
 
@@ -339,7 +339,7 @@ class TestStoreCovenantPackage:
         self, store, mock_driver, sample_covenant_package
     ):
         _, session = mock_driver
-        session.run.side_effect = Exception("Connection refused")
+        session.run.side_effect = ConnectionError("Connection refused")
         result = store.store_covenant_package("f" * 64, sample_covenant_package)
         assert result is None
 
@@ -446,7 +446,7 @@ class TestCreditAssessmentCovenantChain:
         the method itself must not raise).
         """
         _, session = mock_driver
-        session.run.side_effect = Exception("DB down")
+        session.run.side_effect = ConnectionError("DB down")
         assessment_id = store.store_credit_assessment(
             "FailCo", sample_scorecard, sample_debt_capacity
         )

@@ -35,6 +35,8 @@ def vector_index_statement(embedding_dim: int, model_name: str) -> str:
     import re
 
     embedding_dim = int(embedding_dim)  # enforce integer
+    if embedding_dim <= 0 or embedding_dim > 65536:
+        raise ValueError(f"embedding_dim must be 1-65536, got {embedding_dim}")
     # Strip to alphanumeric + underscore only (defense-in-depth)
     safe_model = re.sub(r"[^a-zA-Z0-9_]", "_", model_name)
     index_name = f"chunk_embedding_{safe_model}"

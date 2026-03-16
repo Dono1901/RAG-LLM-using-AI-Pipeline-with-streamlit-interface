@@ -201,74 +201,28 @@ class ExcelProcessor:
         sheets = []
         wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
 
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            # Stream rows instead of list() to avoid OOM on huge sheets
-            data = []
-            row_limit = settings.max_workbook_rows + 10  # header search margin
-            for row in ws.values:
-                data.append(row)
-                if len(data) >= row_limit:
-                    break
-
-            if not data:
-                continue
-
-            # Find header row
-            header_row = self._find_header_row(data)
-
-            # Create DataFrame
-            if header_row >= 0 and header_row < len(data):
-                headers = data[header_row]
-                # Clean headers
-                headers = [str(h).strip() if h else f"Column_{i}" for i, h in enumerate(headers)]
-                df = pd.DataFrame(data[header_row + 1:], columns=headers)
-            else:
-                df = pd.DataFrame(data)
-
-            # Deduplicate column names to prevent df[col] returning DataFrame
-            if df.columns.duplicated().any():
-                cols = df.columns.tolist()
-                seen: dict = {}
-                for i, c in enumerate(cols):
-                    if c in seen:
-                        seen[c] += 1
-                        cols[i] = f"{c}_{seen[c]}"
-                    else:
-                        seen[c] = 0
-                df.columns = cols
-
-            # Clean the DataFrame
-            df = self._clean_dataframe(df)
-
-            if not df.empty:
-                sheets.append(SheetData(
-                    name=sheet_name,
-                    df=df,
-                    header_row=header_row,
-                    columns=[],
-                    metadata={'source_format': 'xlsx'}
-                ))
-
-        wb.close()
-        return sheets
-
-    def _load_xlrd(self, file_path: Path) -> List[SheetData]:
-        """Load xls files using xlrd (or pandas as fallback)."""
         try:
-            import xlrd
-            wb = xlrd.open_workbook(file_path)
-            sheets = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                # Stream rows instead of list() to avoid OOM on huge sheets
+                data = []
+                row_limit = settings.max_workbook_rows + 10  # header search margin
+                for row in ws.values:
+                    data.append(row)
+                    if len(data) >= row_limit:
+                        break
 
-            for sheet in wb.sheets():
-                if sheet.nrows == 0:
+                if not data:
                     continue
 
-                data = [sheet.row_values(i) for i in range(sheet.nrows)]
+                # Find header row
                 header_row = self._find_header_row(data)
 
-                if header_row >= 0:
-                    headers = [str(h).strip() if h else f"Column_{i}" for i, h in enumerate(data[header_row])]
+                # Create DataFrame
+                if header_row >= 0 and header_row < len(data):
+                    headers = data[header_row]
+                    # Clean headers
+                    headers = [str(h).strip() if h else f"Column_{i}" for i, h in enumerate(headers)]
                     df = pd.DataFrame(data[header_row + 1:], columns=headers)
                 else:
                     df = pd.DataFrame(data)
@@ -285,16 +239,67 @@ class ExcelProcessor:
                             seen[c] = 0
                     df.columns = cols
 
+                # Clean the DataFrame
                 df = self._clean_dataframe(df)
 
                 if not df.empty:
                     sheets.append(SheetData(
-                        name=sheet.name,
+                        name=sheet_name,
                         df=df,
                         header_row=header_row,
                         columns=[],
-                        metadata={'source_format': 'xls'}
+                        metadata={'source_format': 'xlsx'}
                     ))
+        finally:
+            wb.close()
+
+        return sheets
+
+    def _load_xlrd(self, file_path: Path) -> List[SheetData]:
+        """Load xls files using xlrd (or pandas as fallback)."""
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_path)
+            sheets = []
+
+            try:
+                for sheet in wb.sheets():
+                    if sheet.nrows == 0:
+                        continue
+
+                    data = [sheet.row_values(i) for i in range(sheet.nrows)]
+                    header_row = self._find_header_row(data)
+
+                    if header_row >= 0:
+                        headers = [str(h).strip() if h else f"Column_{i}" for i, h in enumerate(data[header_row])]
+                        df = pd.DataFrame(data[header_row + 1:], columns=headers)
+                    else:
+                        df = pd.DataFrame(data)
+
+                    # Deduplicate column names to prevent df[col] returning DataFrame
+                    if df.columns.duplicated().any():
+                        cols = df.columns.tolist()
+                        seen: dict = {}
+                        for i, c in enumerate(cols):
+                            if c in seen:
+                                seen[c] += 1
+                                cols[i] = f"{c}_{seen[c]}"
+                            else:
+                                seen[c] = 0
+                        df.columns = cols
+
+                    df = self._clean_dataframe(df)
+
+                    if not df.empty:
+                        sheets.append(SheetData(
+                            name=sheet.name,
+                            df=df,
+                            header_row=header_row,
+                            columns=[],
+                            metadata={'source_format': 'xls'}
+                        ))
+            finally:
+                wb.release_resources()
 
             return sheets
         except ImportError:

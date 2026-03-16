@@ -12,6 +12,17 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Neo4j exception types for error classification
+try:
+    from neo4j.exceptions import (
+        ServiceUnavailable,
+        SessionExpired,
+        TransientError,
+    )
+    _NEO4J_TRANSIENT = (ServiceUnavailable, SessionExpired, TransientError, ConnectionError, OSError)
+except ImportError:
+    _NEO4J_TRANSIENT = (ConnectionError, OSError)
+
 
 def _neo4j_configured() -> bool:
     """Return True if NEO4J_URI is set in the environment."""
@@ -108,8 +119,9 @@ class Neo4jStore:
                 # Build batch payload for UNWIND
                 batch = []
                 for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                    content = chunk.get("content") or ""
                     chunk_id = hashlib.sha256(
-                        f"{doc_id}:{i}:{chunk.get('content', '')[:100]}".encode()
+                        f"{doc_id}:{i}:{content[:100]}".encode()
                     ).hexdigest()
                     batch.append({
                         "chunk_id": chunk_id,
@@ -125,8 +137,11 @@ class Neo4jStore:
                     stored = len(batch)
 
             logger.info("Stored %d chunks for %s in Neo4j", stored, doc_id)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_chunks failed (transient): %s", exc)
         except Exception as exc:
-            logger.warning("Neo4j store_chunks failed: %s", exc)
+            logger.error("Neo4j store_chunks failed (permanent): %s", exc)
+            raise
 
         return stored
 
@@ -183,8 +198,11 @@ class Neo4jStore:
                     session.run(MERGE_SCORES_BATCH, batch=score_batch)
 
             logger.info("Stored financial data for %s / %s", doc_id, period_label)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_financial_data failed (transient): %s", exc)
         except Exception as exc:
-            logger.warning("Neo4j store_financial_data failed: %s", exc)
+            logger.error("Neo4j store_financial_data failed (permanent): %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     # Structured financial data population (Phase 2)
@@ -270,8 +288,11 @@ class Neo4jStore:
                         total_stored += len(batch)
 
             logger.info("Stored %d line items for period %s", total_stored, period_id)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_line_items failed (transient): %s", exc)
         except Exception as exc:
-            logger.warning("Neo4j store_line_items failed: %s", exc)
+            logger.error("Neo4j store_line_items failed (permanent): %s", exc)
+            raise
 
         return total_stored
 
@@ -326,9 +347,12 @@ class Neo4jStore:
                 session.run(MERGE_DERIVED_FROM_BATCH, batch=batch)
             logger.info("Created %d DERIVED_FROM edges for period %s", len(batch), period_id)
             return len(batch)
-        except Exception as exc:
-            logger.warning("Neo4j store_derived_from_edges failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_derived_from_edges failed (transient): %s", exc)
             return 0
+        except Exception as exc:
+            logger.error("Neo4j store_derived_from_edges failed (permanent): %s", exc)
+            raise
 
     def store_credit_assessment(
         self,
@@ -396,9 +420,12 @@ class Neo4jStore:
                 scorecard.grade,
             )
             return assessment_id
-        except Exception as exc:
-            logger.warning("Neo4j store_credit_assessment failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_credit_assessment failed (transient): %s", exc)
             return None
+        except Exception as exc:
+            logger.error("Neo4j store_credit_assessment failed (permanent): %s", exc)
+            raise
 
     def store_covenant_package(
         self,
@@ -448,9 +475,12 @@ class Neo4jStore:
                 assessment_id[:8],
             )
             return package_id
-        except Exception as exc:
-            logger.warning("Neo4j store_covenant_package failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_covenant_package failed (transient): %s", exc)
             return None
+        except Exception as exc:
+            logger.error("Neo4j store_covenant_package failed (permanent): %s", exc)
+            raise
 
     def link_fiscal_periods(self, period_labels_and_ids: List[Dict[str, str]]) -> int:
         """Create temporal PRECEDES/FOLLOWS edges between fiscal periods.
@@ -479,9 +509,12 @@ class Neo4jStore:
                 session.run(MERGE_TEMPORAL_EDGES, pairs=pairs)
             logger.info("Linked %d temporal period pairs", len(pairs))
             return len(pairs)
-        except Exception as exc:
-            logger.warning("Neo4j link_fiscal_periods failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j link_fiscal_periods failed (transient): %s", exc)
             return 0
+        except Exception as exc:
+            logger.error("Neo4j link_fiscal_periods failed (permanent): %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     # Read operations
@@ -668,9 +701,12 @@ class Neo4jStore:
                 risk_summary.overall_risk_level,
             )
             return portfolio_id
-        except Exception as exc:
-            logger.warning("Neo4j store_portfolio_analysis failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_portfolio_analysis failed (transient): %s", exc)
             return None
+        except Exception as exc:
+            logger.error("Neo4j store_portfolio_analysis failed (permanent): %s", exc)
+            raise
 
     def store_compliance_report(
         self,
@@ -724,9 +760,12 @@ class Neo4jStore:
                 audit.risk_level if audit else "unknown",
             )
             return compliance_id
-        except Exception as exc:
-            logger.warning("Neo4j store_compliance_report failed: %s", exc)
+        except _NEO4J_TRANSIENT as exc:
+            logger.warning("Neo4j store_compliance_report failed (transient): %s", exc)
             return None
+        except Exception as exc:
+            logger.error("Neo4j store_compliance_report failed (permanent): %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     # Lifecycle

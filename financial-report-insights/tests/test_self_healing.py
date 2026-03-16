@@ -233,10 +233,7 @@ class TestChunkCountValidation:
         assert not any("chunks indexed" in r.message for r in caplog.records)
 
 
-# ---------------------------------------------------------------------------
-# Ingestion retry tests
-# ---------------------------------------------------------------------------
-
+# Ingestion retry tests: see TestIngestionRetry class below (line ~460)
 
 # ---------------------------------------------------------------------------
 # Graduated warm-up tests

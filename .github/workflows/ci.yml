@@ -77,10 +77,10 @@ jobs:
           pip install bandit safety pip-audit
 
       - name: Bandit security scan
-        run: bandit -r . -x ./tests -f json -o bandit-report.json --severity-level medium || true
+        run: bandit -r . -x ./tests -f json -o bandit-report.json --severity-level medium
 
       - name: pip-audit dependency scan
-        run: pip-audit --requirement requirements.txt --output json --desc > pip-audit-report.json || true
+        run: pip-audit --requirement requirements.txt --output json --desc > pip-audit-report.json
 
       - name: Upload security reports
         uses: actions/upload-artifact@v4
@@ -139,7 +139,7 @@ jobs:
         if: matrix.python-version == '3.12'
         run: |
           pip install coverage
-          python -m coverage report --fail-under=60 || echo "::warning::Coverage below 60%"
+          python -m coverage report --fail-under=60
 
   # ──────────────────────────────────────────────────────────────
   # Stage 4: Build Validation
@@ -170,6 +170,15 @@ jobs:
           docker images rag-financial-insights:${{ github.sha }}
           echo "Image built successfully"
 
+      - name: Trivy container scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: rag-financial-insights:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
   # ──────────────────────────────────────────────────────────────
   # Stage 5: Quality Gate
   # ──────────────────────────────────────────────────────────────
@@ -198,9 +207,9 @@ jobs:
             echo "::error::Build stage failed"
             exit 1
           fi
-          # Security is advisory (doesn't block)
           if [[ "${{ needs.security.result }}" == "failure" ]]; then
-            echo "::warning::Security scan had issues — review artifacts"
+            echo "::error::Security scan failed — review artifacts before merging"
+            exit 1
           fi
 
           echo "✅ Quality gate passed"

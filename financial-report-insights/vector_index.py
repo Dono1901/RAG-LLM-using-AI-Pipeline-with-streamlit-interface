@@ -140,6 +140,9 @@ class NumpyFlatIndex:
                 f"got shape {new_matrix.shape}"
             )
 
+        # Pre-normalize at add time so search is a pure dot product
+        new_matrix = self._l2_normalize(new_matrix)
+
         if self._matrix.shape[0] == 0:
             self._matrix = new_matrix
         else:
@@ -166,10 +169,8 @@ class NumpyFlatIndex:
         q = np.asarray(query_embedding, dtype=np.float32)
         q = self._l2_normalize(q.reshape(1, -1)).reshape(-1)
 
-        # Normalise the stored matrix row-wise then dot-product
-        norms = np.linalg.norm(self._matrix, axis=1)
-        safe_norms = np.where(norms == 0.0, 1.0, norms)
-        similarities = self._matrix @ q / safe_norms
+        # Stored vectors are already L2-normalized at add() time
+        similarities = self._matrix @ q
 
         if n > top_k * 4:
             # O(n) partial sort via argpartition for large collections
@@ -284,7 +285,11 @@ class FAISSIndex:
     # ------------------------------------------------------------------
 
     def add(self, embeddings: List[List[float]], ids: List[int]) -> None:
-        """Add vectors and rebuild the index.
+        """Add vectors to the index.
+
+        For the flat index (<=10k vectors), new vectors are added
+        incrementally. For larger collections requiring IVF, the index is
+        rebuilt from all accumulated embeddings.
 
         Args:
             embeddings: Float vectors.
@@ -303,8 +308,21 @@ class FAISSIndex:
         self._raw_embeddings.extend(embeddings)
         self._ids.extend(ids)
 
-        matrix = self._normalize(np.asarray(self._raw_embeddings, dtype=np.float32))
-        self._build_index(matrix)
+        new_matrix = self._normalize(np.asarray(embeddings, dtype=np.float32))
+        total = len(self._ids)
+
+        if self._index is None:
+            # First add: build index from scratch
+            self._build_index(new_matrix)
+        elif total <= self._IVF_THRESHOLD:
+            # Flat index: incremental add (O(batch) not O(total))
+            self._index.add(new_matrix)
+        else:
+            # IVF index: must rebuild with all data for proper cell assignment
+            all_matrix = self._normalize(
+                np.asarray(self._raw_embeddings, dtype=np.float32)
+            )
+            self._build_index(all_matrix)
 
     def search(self, query_embedding: List[float], top_k: int) -> List[Tuple[int, float]]:
         """Search for the *top_k* nearest neighbours.
@@ -431,7 +449,8 @@ class HNSWIndex:
         """Add vectors to the index.
 
         hnswlib requires ``max_elements`` to be set at construction, so the
-        index is rebuilt from scratch whenever new vectors are added.
+        index is rebuilt from all accumulated embeddings when capacity is
+        exceeded.
 
         Args:
             embeddings: Float vectors.
@@ -447,12 +466,29 @@ class HNSWIndex:
         if not embeddings:
             return
 
-        self._ids.extend(ids)
-        matrix = np.asarray(embeddings, dtype=np.float32)
+        new_matrix = np.asarray(embeddings, dtype=np.float32)
 
-        # Rebuild index with updated max_elements
-        self._init_index(len(self._ids))
-        self._index.add_items(matrix, self._ids)
+        # Accumulate raw embeddings for rebuild capability
+        if not hasattr(self, "_raw_embeddings"):
+            self._raw_embeddings: List[List[float]] = []
+        self._raw_embeddings.extend(embeddings)
+        self._ids.extend(ids)
+
+        total = len(self._ids)
+
+        if self._index is None:
+            # First add: build with 2x headroom to avoid frequent rebuilds
+            self._init_index(max(total * 2, 1024))
+            all_matrix = np.asarray(self._raw_embeddings, dtype=np.float32)
+            self._index.add_items(all_matrix, self._ids)
+        elif total > self._index.get_max_elements():
+            # Capacity exceeded: rebuild with 2x headroom from all data
+            self._init_index(total * 2)
+            all_matrix = np.asarray(self._raw_embeddings, dtype=np.float32)
+            self._index.add_items(all_matrix, self._ids)
+        else:
+            # Incremental add: capacity is sufficient
+            self._index.add_items(new_matrix, ids)
 
     def search(self, query_embedding: List[float], top_k: int) -> List[Tuple[int, float]]:
         """Search for nearest neighbours.

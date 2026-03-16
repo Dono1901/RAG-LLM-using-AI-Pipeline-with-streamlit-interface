@@ -184,7 +184,7 @@ def ingest_excel(
         suffix = file_path.suffix.lower()
         if suffix in (".csv", ".tsv"):
             sep = "\t" if suffix == ".tsv" else ","
-            df = pd.read_csv(file_path, sep=sep)
+            df = pd.read_csv(file_path, sep=sep, nrows=settings.max_workbook_rows)
             # Fix unnamed columns from headerless Excel exports
             df.columns = [
                 c if not str(c).startswith("Unnamed") else f"Col_{i}"
@@ -196,7 +196,7 @@ def ingest_excel(
             sheets = []
             for sheet_name in xls.sheet_names:
                 try:
-                    df = pd.read_excel(xls, sheet_name=sheet_name)
+                    df = pd.read_excel(xls, sheet_name=sheet_name, nrows=settings.max_workbook_rows)
                     # Fix unnamed columns
                     df.columns = [
                         c if not str(c).startswith("Unnamed") else f"Col_{i}"

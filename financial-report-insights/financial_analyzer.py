@@ -3023,8 +3023,11 @@ class CharlieAnalyzer:
             z_pts = 15
         elif z.zone == 'partial':
             z_pts = 10
-        elif z.zone in ('distress', 'partial_distress'):
+        elif z.zone == 'distress':
             z_pts = 0
+        elif z.zone == 'partial_distress':
+            # Partial data with low score — penalize less than confirmed distress
+            z_pts = 8
         else:
             z_pts = 5
         component_scores['z_score'] = z_pts
@@ -3576,15 +3579,17 @@ class CharlieAnalyzer:
             returned object listing field names that were None in base data
             (and therefore could not be adjusted).
         """
-        import copy
-        adjusted = copy.deepcopy(data)
+        from dataclasses import fields as dc_fields
+        # Shallow copy all fields via dict - FinancialData has only scalar/None fields
+        field_values = {f.name: getattr(data, f.name) for f in dc_fields(data)}
         skipped: List[str] = []
         for field_name, multiplier in adjustments.items():
-            current_val = getattr(adjusted, field_name, None)
+            current_val = field_values.get(field_name)
             if current_val is not None:
-                setattr(adjusted, field_name, current_val * multiplier)
+                field_values[field_name] = current_val * multiplier
             else:
                 skipped.append(field_name)
+        adjusted = FinancialData(**field_values)
         adjusted._skipped_adjustments = skipped  # type: ignore[attr-defined]
         return adjusted
 
@@ -3861,7 +3866,7 @@ class CharlieAnalyzer:
                 mean_mult = 1.0 + params.get('mean_pct', 0.0) / 100.0
                 std_mult = params.get('std_pct', 10.0) / 100.0
                 sample = rng.normal(mean_mult, std_mult)
-                sample = max(sample, 0.01)  # Floor at 1% to avoid negatives
+                sample = max(sample, 0.001)  # Floor at 0.1% — allows near-total loss modeling
                 adjustments[fld] = sample
 
             adjusted = self._apply_adjustments(data, adjustments)
@@ -4818,7 +4823,11 @@ class CharlieAnalyzer:
                 op = cls._AST_OPS.get(type(node.op))
                 if op is None:
                     raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-                return op(_walk(node.left), _walk(node.right))
+                left_val = _walk(node.left)
+                right_val = _walk(node.right)
+                if isinstance(node.op, ast.Div) and right_val == 0:
+                    raise ValueError("Division by zero in formula")
+                return op(left_val, right_val)
             if isinstance(node, ast.UnaryOp):
                 op = cls._AST_OPS.get(type(node.op))
                 if op is None:

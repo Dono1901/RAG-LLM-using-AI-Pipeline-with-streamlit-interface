@@ -106,12 +106,18 @@ class SystemMonitor:
     # ------------------------------------------------------------------
 
     def _errors_in_window(self, now: float) -> List[Tuple[float, str, str, str]]:
-        """Return errors within the 5-minute sliding window."""
+        """Return errors within the 5-minute sliding window.
+
+        Must be called with self._lock held, or with a pre-copied snapshot.
+        """
         cutoff = now - _ERROR_WINDOW_SECONDS
         return [e for e in self._errors if e[0] >= cutoff]
 
     def _error_rate_per_min(self, now: float) -> float:
-        """Compute errors per minute over the last 5-minute window."""
+        """Compute errors per minute over the last 5-minute window.
+
+        Caller must hold ``self._lock`` — this method does not acquire it.
+        """
         recent = self._errors_in_window(now)
         if not recent:
             return 0.0

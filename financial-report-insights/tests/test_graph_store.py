@@ -111,7 +111,7 @@ class TestNeo4jStoreConnect:
         from graph_store import Neo4jStore
         with patch.dict("os.environ", {"NEO4J_URI": "bolt://badhost:9999"}):
             with patch("neo4j.GraphDatabase") as mock_gdb:
-                mock_gdb.driver.side_effect = Exception("Connection refused")
+                mock_gdb.driver.side_effect = ConnectionError("Connection refused")
                 assert Neo4jStore.connect() is None
 
 
@@ -139,7 +139,7 @@ class TestNeo4jStoreChunks:
 
     def test_store_chunks_handles_failure(self, store, mock_driver):
         _, session = mock_driver
-        session.run.side_effect = Exception("Neo4j down")
+        session.run.side_effect = ConnectionError("Neo4j down")
         result = store.store_chunks([{"content": "x"}], [[0.1]], "f.pdf")
         assert result == 0  # graceful failure
 
@@ -177,7 +177,7 @@ class TestNeo4jStoreVectorSearch:
 
     def test_vector_search_returns_empty_on_failure(self, store, mock_driver):
         _, session = mock_driver
-        session.run.side_effect = Exception("index not found")
+        session.run.side_effect = ConnectionError("index not found")
         results = store.vector_search([0.1] * 10)
         assert results == []
 
@@ -262,7 +262,7 @@ class TestNeo4jStoreLineItems:
 
     def test_store_line_items_handles_failure(self, store, mock_driver):
         _, session = mock_driver
-        session.run.side_effect = Exception("Neo4j down")
+        session.run.side_effect = ConnectionError("Neo4j down")
         from financial_analyzer import FinancialData
         fd = FinancialData(revenue=100, total_assets=500)
         count = store.store_line_items(fd, "p1")
@@ -284,7 +284,7 @@ class TestNeo4jStoreDerivedFromEdges:
 
     def test_store_derived_from_edges_handles_failure(self, store, mock_driver):
         _, session = mock_driver
-        session.run.side_effect = Exception("Neo4j down")
+        session.run.side_effect = ConnectionError("Neo4j down")
         count = store.store_derived_from_edges("p1")
         assert count == 0
 
@@ -449,7 +449,7 @@ class TestStorePortfolioAnalysis:
     def test_returns_none_on_failure(self):
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("connection lost")
+        mock_driver.session.side_effect = ConnectionError("connection lost")
         store = Neo4jStore.__new__(Neo4jStore)
         store._driver = mock_driver
 
@@ -517,7 +517,7 @@ class TestStoreComplianceReport:
     def test_returns_none_on_failure(self):
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("connection lost")
+        mock_driver.session.side_effect = ConnectionError("connection lost")
         store = Neo4jStore.__new__(Neo4jStore)
         store._driver = mock_driver
 
@@ -548,7 +548,7 @@ class TestGraphStoreReadErrorPaths:
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
         mock_session = MagicMock()
-        mock_session.run.side_effect = Exception("read failed")
+        mock_session.run.side_effect = ConnectionError("read failed")
         mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
         store = Neo4jStore.__new__(Neo4jStore)
@@ -635,7 +635,7 @@ class TestGraphStoreErrorPaths:
         """ensure_schema gracefully handles session() failure."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Neo4j unreachable")
+        mock_driver.session.side_effect = ConnectionError("Neo4j unreachable")
         store = Neo4jStore(mock_driver)
 
         # Should raise because ensure_schema does not catch session() failures
@@ -646,7 +646,7 @@ class TestGraphStoreErrorPaths:
         """store_chunks handles session() failure gracefully."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Connection refused")
+        mock_driver.session.side_effect = ConnectionError("Connection refused")
         store = Neo4jStore(mock_driver)
 
         result = store.store_chunks(
@@ -660,7 +660,7 @@ class TestGraphStoreErrorPaths:
         """store_financial_data handles session() failure gracefully."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("DB timeout")
+        mock_driver.session.side_effect = ConnectionError("DB timeout")
         store = Neo4jStore(mock_driver)
 
         store.store_financial_data(
@@ -676,7 +676,7 @@ class TestGraphStoreErrorPaths:
         from financial_analyzer import FinancialData
 
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Network error")
+        mock_driver.session.side_effect = ConnectionError("Network error")
         store = Neo4jStore(mock_driver)
 
         fd = FinancialData(revenue=1_000_000, total_assets=5_000_000)
@@ -687,7 +687,7 @@ class TestGraphStoreErrorPaths:
         """vector_search returns empty list when session() throws."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Session creation failed")
+        mock_driver.session.side_effect = ConnectionError("Session creation failed")
         store = Neo4jStore(mock_driver)
 
         results = store.vector_search([0.1] * 10, top_k=5)
@@ -723,7 +723,7 @@ class TestGraphStoreErrorPaths:
         """store_derived_from_edges returns 0 on session failure."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Connection timeout")
+        mock_driver.session.side_effect = ConnectionError("Connection timeout")
         store = Neo4jStore(mock_driver)
 
         count = store.store_derived_from_edges("period_id_123")
@@ -733,7 +733,7 @@ class TestGraphStoreErrorPaths:
         """link_fiscal_periods returns 0 on session failure."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Session unavailable")
+        mock_driver.session.side_effect = ConnectionError("Session unavailable")
         store = Neo4jStore(mock_driver)
 
         count = store.link_fiscal_periods([
@@ -748,7 +748,7 @@ class TestGraphStoreErrorPaths:
         from types import SimpleNamespace
 
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Neo4j down")
+        mock_driver.session.side_effect = ConnectionError("Neo4j down")
         store = Neo4jStore(mock_driver)
 
         scorecard = SimpleNamespace(
@@ -769,7 +769,7 @@ class TestGraphStoreErrorPaths:
         from types import SimpleNamespace
 
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Connection lost")
+        mock_driver.session.side_effect = ConnectionError("Connection lost")
         store = Neo4jStore(mock_driver)
 
         covenant_pkg = SimpleNamespace(
@@ -788,7 +788,7 @@ class TestGraphStoreErrorPaths:
         from types import SimpleNamespace
 
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("DB unavailable")
+        mock_driver.session.side_effect = ConnectionError("DB unavailable")
         store = Neo4jStore(mock_driver)
 
         risk_summary = SimpleNamespace(
@@ -808,7 +808,7 @@ class TestGraphStoreErrorPaths:
         from types import SimpleNamespace
 
         mock_driver = MagicMock()
-        mock_driver.session.side_effect = Exception("Neo4j timeout")
+        mock_driver.session.side_effect = ConnectionError("Neo4j timeout")
         store = Neo4jStore(mock_driver)
 
         report = SimpleNamespace(
@@ -953,8 +953,8 @@ class TestGraphStoreErrorPaths:
         embeddings = [[0.1] * 10, [0.2] * 10]
 
         result = store.store_chunks(chunks, embeddings, "f.pdf")
-        # Should return 0 because slicing None raises TypeError, caught and logged
-        assert result == 0
+        # None content is now handled gracefully (coerced to ""), both chunks stored
+        assert result == 2
 
     def test_store_financial_data_with_empty_ratios_and_scores(self):
         """store_financial_data handles None ratios and scores."""
@@ -1053,7 +1053,7 @@ class TestGraphStoreErrorPaths:
         """close() handles driver.close() exceptions silently."""
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
-        mock_driver.close.side_effect = Exception("Already closed")
+        mock_driver.close.side_effect = ConnectionError("Already closed")
         store = Neo4jStore(mock_driver)
 
         # Should not raise
@@ -1065,7 +1065,7 @@ class TestGraphStoreErrorPaths:
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
         # After close, session() will fail
-        mock_driver.session.side_effect = Exception("Driver is closed")
+        mock_driver.session.side_effect = ConnectionError("Driver is closed")
         store = Neo4jStore(mock_driver)
 
         store.close()

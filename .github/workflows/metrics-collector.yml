@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 jobs:
@@ -36,13 +36,13 @@ jobs:
         id: metrics
         run: python .github/scripts/metrics_collector.py
 
-      - name: Commit updated metrics
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/metrics/history.json
-          git diff --cached --quiet || git commit -m "metrics: weekly metrics collection [skip ci]"
-          git push || true
+      - name: Upload metrics as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-metrics
+          path: .github/metrics/history.json
+          retention-days: 90
 
       - name: Create regression issue if needed
         if: steps.metrics.outputs.has_regressions == 'true'

@@ -325,6 +325,39 @@ class BaseAgent:
         max_steps: Hard cap on think-act-observe iterations per ``run`` call.
     """
 
+    # Patterns that could trick the LLM output parser into invoking tools
+    # or emitting a final answer when embedded in user-supplied text.
+    _DIRECTIVE_SANITIZE_RE = re.compile(
+        r"^[ \t]*(?:TOOL|Tool|Action|ARGS?|Arguments?|Parameters?|Input"
+        r"|FINAL_ANSWER|Final\s+Answer|Use\s+tool|Calling)\s*[:\-]",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    @staticmethod
+    def _sanitize_user_input(text: str) -> str:
+        """Strip tool/action directive patterns from untrusted input.
+
+        This prevents prompt-injection attacks where a user query contains
+        lines like ``TOOL: calculate_ratio`` that would be picked up by
+        :meth:`_select_tool` when the text is later included in an LLM
+        prompt.
+
+        Args:
+            text: Raw user or context string.
+
+        Returns:
+            Sanitised copy with directive prefixes neutralised.
+        """
+        sanitized_lines: list[str] = []
+        for line in text.splitlines():
+            if BaseAgent._DIRECTIVE_SANITIZE_RE.match(line):
+                # Prefix with a visible marker so the content is preserved
+                # for the LLM to read, but won't match the directive regex.
+                sanitized_lines.append(f"[SANITIZED] {line.lstrip()}")
+            else:
+                sanitized_lines.append(line)
+        return "\n".join(sanitized_lines)
+
     def __init__(
         self,
         name: str,
@@ -353,10 +386,11 @@ class BaseAgent:
             List of step strings (at least one element).  Falls back to a
             single-step list ``[query]`` if the LLM output cannot be parsed.
         """
+        safe_query = self._sanitize_user_input(query)
         prompt = (
             "Break the following task into a numbered list of concrete steps.\n"
             "Respond ONLY with a numbered list, one step per line.\n\n"
-            f"Task: {query}"
+            f"Task: {safe_query}"
         )
         raw = self._llm.generate(prompt)
         steps = self._parse_numbered_list(raw)
@@ -431,10 +465,11 @@ class BaseAgent:
         Returns:
             A string containing the agent's final answer.
         """
-        self.memory.add_message(AgentMessage(role="user", content=query))
-        logger.info("Agent %r starting run for: %s", self.name, query[:80])
+        safe_query = self._sanitize_user_input(query)
+        self.memory.add_message(AgentMessage(role="user", content=safe_query))
+        logger.info("Agent %r starting run for: %s", self.name, safe_query[:80])
 
-        steps = self.plan(query)
+        steps = self.plan(safe_query)
         completed_steps: list[AgentStep] = []
 
         for i, step in enumerate(steps):
@@ -601,7 +636,7 @@ class BaseAgent:
                 "Final Answer: <answer>\n"
             )
 
-        parts.append(f"Task: {step}")
+        parts.append(f"Task: {self._sanitize_user_input(step)}")
         return "\n".join(parts)
 
     def _synthesise_answer(self, query: str, steps: list[AgentStep]) -> str:

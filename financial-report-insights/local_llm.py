@@ -3,6 +3,7 @@ Local LLM wrapper using Ollama.
 Replaces Claude Sonnet with a free, local model.
 """
 
+import atexit
 import hashlib
 import logging
 import threading
@@ -206,11 +207,19 @@ class LocalLLM:
             self._cache_maxsize = 128
         self._timeout = timeout_seconds
         self._max_retries = max_retries
-        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._executor = ThreadPoolExecutor(max_workers=2)
+        atexit.register(self._shutdown_executor)
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=circuit_breaker_failure_threshold,
             recovery_seconds=circuit_breaker_recovery_seconds,
         )
+
+    def _shutdown_executor(self) -> None:
+        """Shutdown the thread pool executor on process exit."""
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     @property
     def circuit_state(self) -> str:
@@ -438,6 +447,11 @@ class LocalEmbedder:
 
     def _request_embeddings(self, texts: list) -> list:
         """Call the OpenAI-compatible embeddings endpoint."""
+        if self.dimension <= 0:
+            raise RuntimeError(
+                "Embedder dimension not initialized. Ensure embedding service is "
+                "available and wait_for_embedding_service() has completed."
+            )
         # mxbai-embed-large via DMR: ~512 token context per text, ~4K total batch tokens
         max_chars = 2500
         max_batch_chars = 3000
@@ -507,7 +521,24 @@ class LocalEmbedder:
                 })
                 resp.raise_for_status()
                 data = resp.json()
-                return [item["embedding"] for item in data["data"]]
+                try:
+                    return [item["embedding"] for item in data["data"]]
+                except (KeyError, TypeError, IndexError) as exc:
+                    raise ValueError(
+                        "Malformed embedding response: missing 'data' key "
+                        "or invalid structure"
+                    ) from exc
+            except httpx.RequestError as e:
+                if attempt < max_retries:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "Embedding network error (attempt %d/%d, batch=%d texts), "
+                        "retrying in %ds: %s",
+                        attempt, max_retries, len(texts), wait, e,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500 and attempt < max_retries:
                     wait = 2 ** attempt  # 2s, 4s, 8s, 16s

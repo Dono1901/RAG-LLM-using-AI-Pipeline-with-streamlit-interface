@@ -119,6 +119,10 @@ def _resolve_template(template: str, context: Dict[str, Any]) -> str:
                     value = format(value, format_spec)
                 else:
                     value = str(value)
+                # Wrap in sentinel delimiters so the LLM does not
+                # interpret embedded TOOL/Action directives from
+                # prior agent outputs as real instructions.
+                value = f"[USER_CONTEXT_START]{value}[USER_CONTEXT_END]"
                 result_parts.append(value)
             else:
                 # Leave placeholder intact

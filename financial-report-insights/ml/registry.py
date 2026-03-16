@@ -6,7 +6,9 @@ train -> evaluate -> register -> load -> compare workflows.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -15,6 +17,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import joblib
+
+# Regex to reject path traversal and unsafe characters in model_id
+_SAFE_MODEL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +77,21 @@ class ModelRegistry:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _validate_model_id(model_id: str) -> None:
+        """Reject model IDs that could escape the registry directory."""
+        if not model_id or not _SAFE_MODEL_ID.match(model_id):
+            raise ValueError(
+                f"Invalid model_id {model_id!r}. Must match [a-zA-Z0-9][a-zA-Z0-9._-]*"
+            )
+        if ".." in model_id:
+            raise ValueError(f"Path traversal detected in model_id: {model_id!r}")
+
     def _model_dir(self, model_id: str) -> Path:
+        self._validate_model_id(model_id)
+        resolved = (self._root / model_id).resolve()
+        if not str(resolved).startswith(str(self._root.resolve())):
+            raise ValueError(f"model_id escapes registry root: {model_id!r}")
         return self._root / model_id
 
     def _metadata_path(self, model_id: str) -> Path:
@@ -121,7 +140,13 @@ class ModelRegistry:
         model_dir = self._model_dir(metadata.model_id)
         model_dir.mkdir(parents=True, exist_ok=True)
 
-        joblib.dump(model, self._artifact_path(metadata.model_id))
+        artifact_path = self._artifact_path(metadata.model_id)
+        joblib.dump(model, artifact_path)
+
+        # Store SHA-256 hash for integrity verification on load
+        sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        metadata.parameters["_artifact_sha256"] = sha256
+
         self._write_metadata(metadata)
 
         return metadata.model_id
@@ -149,8 +174,19 @@ class ModelRegistry:
             raise FileNotFoundError(
                 f"No model artefact found for id '{model_id}'"
             )
-        model = joblib.load(artifact)
+
+        # Verify artifact integrity before deserializing
         metadata = self._read_metadata(model_id)
+        expected_hash = metadata.parameters.get("_artifact_sha256")
+        if expected_hash:
+            actual_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                raise RuntimeError(
+                    f"Artifact integrity check failed for model '{model_id}': "
+                    f"expected SHA-256 {expected_hash[:16]}..., got {actual_hash[:16]}..."
+                )
+
+        model = joblib.load(artifact)
         return model, metadata
 
     def list_models(

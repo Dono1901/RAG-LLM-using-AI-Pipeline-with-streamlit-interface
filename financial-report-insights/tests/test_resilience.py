@@ -99,7 +99,7 @@ class TestLLMTimeout:
             with pytest.raises(LLMConnectionError, match="Persistent error"):
                 llm.generate("Test")
 
-            # 1 initial attempt + 2 retries = 3 total calls
+            # max_retries=2 means 2 total attempts (not 2 retries after initial)
             assert mock_gen.call_count == 2
 
 

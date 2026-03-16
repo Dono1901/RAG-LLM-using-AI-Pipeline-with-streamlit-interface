@@ -71,11 +71,15 @@ class TestResolveTemplate:
 
     def test_single_placeholder_resolved(self):
         result = _resolve_template("Hello {name}!", {"name": "Alice"})
-        assert result == "Hello Alice!"
+        # Context values wrapped in sentinel delimiters (P0-SEC-05 injection defense)
+        assert "Alice" in result
+        assert "[USER_CONTEXT_START]" in result
+        assert "[USER_CONTEXT_END]" in result
 
     def test_multiple_placeholders(self):
         result = _resolve_template("{a} and {b}", {"a": "X", "b": "Y"})
-        assert result == "X and Y"
+        assert "X" in result
+        assert "Y" in result
 
     def test_missing_placeholder_left_verbatim(self):
         result = _resolve_template("Value: {missing}", {})
@@ -83,11 +87,12 @@ class TestResolveTemplate:
 
     def test_extra_context_keys_ignored(self):
         result = _resolve_template("hi {name}", {"name": "Bob", "extra": "unused"})
-        assert result == "hi Bob"
+        assert "Bob" in result
+        assert "unused" not in result
 
     def test_numeric_value_converted_to_str(self):
         result = _resolve_template("Count: {n}", {"n": 42})
-        assert result == "Count: 42"
+        assert "42" in result
 
 
 # ---------------------------------------------------------------------------
