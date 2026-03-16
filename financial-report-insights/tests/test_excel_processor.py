@@ -349,3 +349,120 @@ class TestColumnPatterns:
         patterns = ExcelProcessor.EQUITY_PATTERNS
         assert any(p.search("Shareholders Equity") for p in patterns)
         assert any(p.search("Retained Earnings") for p in patterns)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate column name handling (Bug 2 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateColumnHandling:
+    """Tests for duplicate column name handling in _analyze_columns."""
+
+    def test_analyze_columns_duplicate_names(self, processor):
+        """_analyze_columns should not crash when df has duplicate column names."""
+        df = pd.DataFrame([[1, 2, 3]], columns=["A", "B", "A"])
+        cols = processor._analyze_columns(df)
+        assert len(cols) == 3
+        # The first and third column both named "A" should both be analyzed
+        assert cols[0].name == "A"
+        assert cols[2].name == "A"
+
+    def test_analyze_columns_df_col_returns_dataframe(self, processor):
+        """When df[col] returns a DataFrame, _analyze_columns should take first column."""
+        df = pd.DataFrame({"A": [1, 2], "B": ["x", "y"]})
+        # Force duplicate by renaming B to A
+        df.columns = ["A", "A"]
+        cols = processor._analyze_columns(df)
+        assert len(cols) == 2
+        # Should not raise 'DataFrame has no attribute dtype'
+        for c in cols:
+            assert c.dtype is not None
+
+    def test_openpyxl_deduplicates_columns(self, tmp_path):
+        """_load_openpyxl should rename duplicate columns with _N suffix."""
+        from excel_processor import ExcelProcessor
+        df = pd.DataFrame({"A": [1, 2], "B": [3, 4], "A_dup": [5, 6]})
+        df.columns = ["A", "B", "A"]  # Force duplicate
+        path = tmp_path / "dup_cols.xlsx"
+        df.to_excel(path, index=False)
+
+        proc = ExcelProcessor(str(tmp_path))
+        sheets = proc._load_openpyxl(path)
+        assert len(sheets) > 0
+        col_names = sheets[0].df.columns.tolist()
+        # No duplicates in resulting DataFrame
+        assert len(col_names) == len(set(col_names))
+
+
+# ---------------------------------------------------------------------------
+# Embedding sanitization tests (Bug 1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestEmbeddingSanitization:
+    """Tests for text sanitization in _request_embeddings."""
+
+    def test_empty_texts_return_zero_vectors(self):
+        """Empty/whitespace-only texts should return zero vectors."""
+        from unittest.mock import MagicMock
+        from local_llm import LocalEmbedder
+
+        embedder = object.__new__(LocalEmbedder)
+        embedder.dimension = 4
+        embedder.model_name = "test"
+        embedder._client = MagicMock()
+
+        result = embedder._request_embeddings(["", "   ", "\t\n"])
+        assert len(result) == 3
+        for vec in result:
+            assert vec == [0.0] * 4
+
+    def test_nul_bytes_stripped(self):
+        """NUL bytes in text should be stripped before sending to DMR."""
+        from unittest.mock import MagicMock, patch
+        from local_llm import LocalEmbedder
+
+        embedder = object.__new__(LocalEmbedder)
+        embedder.dimension = 4
+        embedder.model_name = "test"
+        embedder._url = "http://localhost/v1/embeddings"
+        embedder._client = MagicMock()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "data": [{"embedding": [1.0, 2.0, 3.0, 4.0]}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        embedder._client.post.return_value = mock_resp
+
+        result = embedder._request_embeddings(["hello\x00world"])
+        assert len(result) == 1
+        # Verify the text sent to the API has no NUL byte
+        sent_texts = embedder._client.post.call_args[1]["json"]["input"]
+        for t in sent_texts:
+            assert "\x00" not in t
+
+    def test_mixed_empty_and_real_texts(self):
+        """Mix of empty and real texts should return correct-length result."""
+        from unittest.mock import MagicMock
+        from local_llm import LocalEmbedder
+
+        embedder = object.__new__(LocalEmbedder)
+        embedder.dimension = 2
+        embedder.model_name = "test"
+        embedder._url = "http://localhost/v1/embeddings"
+        embedder._client = MagicMock()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "data": [{"embedding": [1.0, 2.0]}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        embedder._client.post.return_value = mock_resp
+
+        result = embedder._request_embeddings(["", "hello", "  "])
+        assert len(result) == 3
+        assert result[0] == [0.0, 0.0]  # empty -> zero vector
+        assert result[1] == [1.0, 2.0]  # real text -> actual embedding
+        assert result[2] == [0.0, 0.0]  # whitespace -> zero vector

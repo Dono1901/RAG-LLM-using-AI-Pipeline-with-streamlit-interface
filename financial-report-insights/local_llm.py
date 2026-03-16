@@ -448,25 +448,42 @@ class LocalEmbedder:
         except (ImportError, AttributeError):
             max_batch_items = 32
         safe_texts = [t[:max_chars] if len(t) > max_chars else t for t in texts]
+        # Sanitize text: replace NUL bytes and non-UTF8 that crash DMR tokenizer
+        safe_texts = [
+            t.replace('\x00', '').encode('utf-8', errors='replace').decode('utf-8')
+            for t in safe_texts
+        ]
+        # Skip empty/whitespace-only texts; return zero vectors for them later
+        original_indices = list(range(len(safe_texts)))
+        non_empty = [(i, t) for i, t in enumerate(safe_texts) if t.strip()]
+        if not non_empty:
+            return [[0.0] * self.dimension for _ in texts]
+        filtered_indices, filtered_texts = zip(*non_empty)
+        filtered_indices = list(filtered_indices)
         # Use extended retry budget for large ingestion jobs (100+ chunks)
         large_batch = len(texts) >= 100
         # Adaptive batching: group texts until char or item limit reached
-        all_embeddings = []
+        filtered_embeddings: list = []
         batch: list = []
         batch_chars = 0
-        for t in safe_texts:
+        for t in filtered_texts:
             t_len = len(t)
             if batch and (batch_chars + t_len > max_batch_chars
                           or len(batch) >= max_batch_items):
-                all_embeddings.extend(
+                filtered_embeddings.extend(
                     self._send_embedding_batch(batch, large_batch=large_batch))
                 batch = []
                 batch_chars = 0
             batch.append(t)
             batch_chars += t_len
         if batch:
-            all_embeddings.extend(
+            filtered_embeddings.extend(
                 self._send_embedding_batch(batch, large_batch=large_batch))
+        # Map filtered results back, inserting zero vectors for empty texts
+        zero_vec = [0.0] * self.dimension
+        all_embeddings = [zero_vec] * len(safe_texts)
+        for idx, emb in zip(filtered_indices, filtered_embeddings):
+            all_embeddings[idx] = emb
         return all_embeddings
 
     def _send_embedding_batch(

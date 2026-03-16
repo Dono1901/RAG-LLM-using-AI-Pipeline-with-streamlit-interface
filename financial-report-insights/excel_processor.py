@@ -226,6 +226,18 @@ class ExcelProcessor:
             else:
                 df = pd.DataFrame(data)
 
+            # Deduplicate column names to prevent df[col] returning DataFrame
+            if df.columns.duplicated().any():
+                cols = df.columns.tolist()
+                seen: dict = {}
+                for i, c in enumerate(cols):
+                    if c in seen:
+                        seen[c] += 1
+                        cols[i] = f"{c}_{seen[c]}"
+                    else:
+                        seen[c] = 0
+                df.columns = cols
+
             # Clean the DataFrame
             df = self._clean_dataframe(df)
 
@@ -260,6 +272,18 @@ class ExcelProcessor:
                     df = pd.DataFrame(data[header_row + 1:], columns=headers)
                 else:
                     df = pd.DataFrame(data)
+
+                # Deduplicate column names to prevent df[col] returning DataFrame
+                if df.columns.duplicated().any():
+                    cols = df.columns.tolist()
+                    seen: dict = {}
+                    for i, c in enumerate(cols):
+                        if c in seen:
+                            seen[c] += 1
+                            cols[i] = f"{c}_{seen[c]}"
+                        else:
+                            seen[c] = 0
+                    df.columns = cols
 
                 df = self._clean_dataframe(df)
 
@@ -388,6 +412,9 @@ class ExcelProcessor:
 
         for col in df.columns:
             series = df[col]
+            # Duplicate column names cause df[col] to return a DataFrame; take first match
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
 
             # Determine if numeric
             is_numeric = pd.api.types.is_numeric_dtype(series)
