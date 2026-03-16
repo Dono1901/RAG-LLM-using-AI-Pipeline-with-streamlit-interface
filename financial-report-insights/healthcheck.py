@@ -22,7 +22,8 @@ def check_ollama_connection(host: str | None = None) -> Dict[str, str]:
             ollama.list()
         return {"status": "ok", "detail": "Ollama is reachable"}
     except Exception as e:
-        return {"status": "error", "detail": f"Cannot connect to Ollama: {e}"}
+        logger.warning("Healthcheck Ollama connection failed: %s", e)
+        return {"status": "error", "detail": "Ollama connectivity check failed"}
 
 
 def check_model_available(model_name: str, host: str | None = None) -> Dict[str, str]:
@@ -47,7 +48,8 @@ def check_model_available(model_name: str, host: str | None = None) -> Dict[str,
                        f"Run: ollama pull {model_name}"
         }
     except Exception as e:
-        return {"status": "error", "detail": f"Cannot check models: {e}"}
+        logger.warning("Healthcheck model check failed: %s", e)
+        return {"status": "error", "detail": "Ollama model check failed"}
 
 
 def check_documents_folder(docs_path: str = "./documents") -> Dict[str, str]:
@@ -58,7 +60,8 @@ def check_documents_folder(docs_path: str = "./documents") -> Dict[str, str]:
             path.mkdir(parents=True, exist_ok=True)
             return {"status": "ok", "detail": f"Created documents folder: {path}"}
         except OSError as e:
-            return {"status": "error", "detail": f"Cannot create documents folder: {e}"}
+            logger.warning("Healthcheck documents folder creation failed: %s", e)
+            return {"status": "error", "detail": "Cannot create documents folder"}
 
     if not os.access(path, os.W_OK):
         return {"status": "error", "detail": f"Documents folder not writable: {path}"}

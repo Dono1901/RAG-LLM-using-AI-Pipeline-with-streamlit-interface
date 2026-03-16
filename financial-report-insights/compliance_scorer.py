@@ -69,7 +69,7 @@ class RegulatoryRatioReport:
     thresholds_checked: List[RegulatoryThreshold] = field(default_factory=list)
     pass_count: int = 0
     fail_count: int = 0
-    compliance_pct: float = 0.0
+    compliance_pct: Optional[float] = 0.0  # None when all checks had insufficient data
     critical_failures: List[str] = field(default_factory=list)
 
 
@@ -548,13 +548,13 @@ class ComplianceScorer:
             )
 
         total = pass_count + fail_count
-        compliance_pct = (pass_count / total * 100) if total > 0 else 0.0
+        compliance_pct = (pass_count / total * 100) if total > 0 else None
 
         return RegulatoryRatioReport(
             thresholds_checked=results,
             pass_count=pass_count,
             fail_count=fail_count,
-            compliance_pct=round(compliance_pct, 1),
+            compliance_pct=round(compliance_pct, 1) if compliance_pct is not None else None,
             critical_failures=critical_failures,
         )
 
@@ -600,7 +600,7 @@ class ComplianceScorer:
         # Component scores
         sox_pts = int(40 * sox.risk_score / 100)
         sec_pts = int(30 * sec.disclosure_score / 100)
-        reg_pts = int(30 * reg.compliance_pct / 100)
+        reg_pts = int(30 * reg.compliance_pct / 100) if reg.compliance_pct is not None else 0
 
         total = sox_pts + sec_pts + reg_pts
         total = max(0, min(100, total))
@@ -707,8 +707,10 @@ class ComplianceScorer:
             f"SOX risk: {sox.overall_risk} (score {sox.risk_score}/100).",
             f"SEC filing quality: {sec.disclosure_score}/100 "
             f"(Grade {sec.grade}).",
-            f"Regulatory compliance: {reg.compliance_pct:.0f}% "
-            f"({reg.pass_count}/{reg.pass_count + reg.fail_count} passed).",
+            f"Regulatory compliance: "
+            f"{reg.compliance_pct:.0f}% ({reg.pass_count}/{reg.pass_count + reg.fail_count} passed)."
+            if reg.compliance_pct is not None
+            else "Regulatory compliance: N/A (insufficient data for all checks).",
             f"Audit risk: {audit.risk_level} "
             f"(score {audit.score}/100, Grade {audit.grade}).",
         ]

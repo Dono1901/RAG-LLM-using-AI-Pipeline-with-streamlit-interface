@@ -59,10 +59,10 @@ class SystemMonitor:
         self._metrics_collector = metrics_collector
 
         # Rolling error log: (timestamp, error_type, message, component)
-        self._errors: Deque[Tuple[float, str, str, str]] = deque()
+        self._errors: Deque[Tuple[float, str, str, str]] = deque(maxlen=30_000)
 
         # Per-component latency log: (timestamp, component, latency_ms)
-        self._latencies: Deque[Tuple[float, str, float]] = deque()
+        self._latencies: Deque[Tuple[float, str, float]] = deque(maxlen=30_000)
 
         self._start_time: float = time.time()
 

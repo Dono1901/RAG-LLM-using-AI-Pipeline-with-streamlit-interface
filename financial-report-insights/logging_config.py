@@ -22,6 +22,14 @@ def _redact(text: str) -> str:
     return _SECRETS_RE.sub(r"\1=***REDACTED***", text)
 
 
+class RedactingTextFormatter(logging.Formatter):
+    """Text formatter that applies secret redaction."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        result = super().format(record)
+        return _redact(result)
+
+
 class JSONFormatter(logging.Formatter):
     """JSON structured log formatter for production environments."""
 
@@ -67,7 +75,7 @@ def setup_logging() -> None:
     if log_format == "json":
         handler.setFormatter(JSONFormatter())
     else:
-        handler.setFormatter(logging.Formatter(
+        handler.setFormatter(RedactingTextFormatter(
             "%(asctime)s %(name)s %(levelname)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         ))

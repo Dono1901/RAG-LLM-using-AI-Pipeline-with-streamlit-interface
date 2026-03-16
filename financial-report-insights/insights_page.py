@@ -7900,7 +7900,7 @@ class FinancialInsightsPage:
         reg = cs.regulatory_ratios(data)
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("Compliance", f"{reg.compliance_pct:.0f}%")
+        col1.metric("Compliance", f"{reg.compliance_pct:.0f}%" if reg.compliance_pct is not None else "N/A")
         col2.metric("Passed", reg.pass_count)
         col3.metric("Failed", reg.fail_count)
 

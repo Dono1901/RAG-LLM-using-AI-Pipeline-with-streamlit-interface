@@ -33,7 +33,7 @@ class TestCheckOllamaConnection:
         with patch("ollama.list", side_effect=ConnectionError("refused")):
             result = check_ollama_connection()
         assert result["status"] == "error"
-        assert "Cannot connect" in result["detail"]
+        assert "connectivity check failed" in result["detail"]
 
 
 # ---------------------------------------------------------------------------

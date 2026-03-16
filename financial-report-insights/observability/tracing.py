@@ -94,5 +94,5 @@ def start_trace(**metadata):
     try:
         yield trace
     finally:
-        logger.info("Trace complete: %s", trace.summary())
+        logger.debug("Trace complete: %s", trace.summary())
         _trace_local.trace = None

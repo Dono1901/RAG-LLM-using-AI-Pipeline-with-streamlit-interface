@@ -2750,7 +2750,7 @@ class CharlieAnalyzer:
             ebt = safe_divide(data.net_income, 1 - self._tax_rate)
 
         tax_burden = safe_divide(data.net_income, ebt)
-        interest_burden = safe_divide(ebt, data.ebit or data.operating_income)
+        interest_burden = safe_divide(ebt, data.ebit if data.ebit is not None else data.operating_income)
 
         # Identify primary driver
         primary_driver = None
@@ -2809,7 +2809,7 @@ class CharlieAnalyzer:
         x2 = safe_divide(data.retained_earnings, data.total_assets)
 
         # X3: EBIT / Total Assets
-        ebit = data.ebit or data.operating_income
+        ebit = data.ebit if data.ebit is not None else data.operating_income
         x3 = safe_divide(ebit, data.total_assets)
 
         # X4: Book Value of Equity / Total Liabilities (proxy for market value)
@@ -4337,8 +4337,10 @@ class CharlieAnalyzer:
 
         # DIO = Inventory / COGS * 365
         dio = None
-        if inv is not None and cogs > 0:
-            dio = round(inv / cogs * 365, 1)
+        if inv is not None and cogs is not None:
+            dio_raw = safe_divide(inv, cogs)
+            dio = round(dio_raw * 365, 1) if dio_raw is not None else None
+        if dio is not None:
             if dio > 90:
                 insights.append(f"DIO of {dio:.0f} days indicates slow inventory turnover; review SKU performance.")
             elif dio > 60:
@@ -4348,8 +4350,10 @@ class CharlieAnalyzer:
 
         # DPO = Accounts Payable / COGS * 365
         dpo = None
-        if ap is not None and cogs > 0:
-            dpo = round(ap / cogs * 365, 1)
+        if ap is not None and cogs is not None:
+            dpo_raw = safe_divide(ap, cogs)
+            dpo = round(dpo_raw * 365, 1) if dpo_raw is not None else None
+        if dpo is not None:
             if dpo < 30:
                 insights.append(f"DPO of {dpo:.0f} days is low; negotiate longer payment terms with suppliers.")
             elif dpo > 90:
@@ -5725,7 +5729,7 @@ class CharlieAnalyzer:
 
         # Estimate NOPAT: EBIT * (1 - tax_rate)
         # Estimate tax rate from net_income / ebit if possible
-        ebit = data.ebit or data.operating_income
+        ebit = data.ebit if data.ebit is not None else data.operating_income
         ni = data.net_income
         tax_rate = 0.25  # default
         if ebit and ni is not None and ebit > 1e-12:
@@ -6099,7 +6103,7 @@ class CharlieAnalyzer:
 
         # --- 7. Debt Service (15%) ---
         ds_score = 50.0
-        ebit_ds = data.ebit or data.operating_income
+        ebit_ds = data.ebit if data.ebit is not None else data.operating_income
         interest_ds = data.interest_expense or 0
         debt_ds = data.total_debt or 0
         ocf_ds = data.operating_cash_flow
@@ -6525,7 +6529,7 @@ class CharlieAnalyzer:
         ni = data.net_income
         ta = data.total_assets
         equity = data.total_equity
-        ebit = data.ebit or data.operating_income
+        ebit = data.ebit if data.ebit is not None else data.operating_income
         debt = data.total_debt or 0
         interest = data.interest_expense or 0
         cl = data.current_liabilities or 0
@@ -6672,7 +6676,7 @@ class CharlieAnalyzer:
         equity = data.total_equity
         ta = data.total_assets
         debt = data.total_debt or 0
-        ebit = data.ebit or data.operating_income
+        ebit = data.ebit if data.ebit is not None else data.operating_income
         interest = data.interest_expense or 0
         revenue = data.revenue or 0
 
@@ -6815,7 +6819,7 @@ class CharlieAnalyzer:
         equity = data.total_equity
         ta = data.total_assets
         debt = data.total_debt or 0
-        ebit = data.ebit or data.operating_income
+        ebit = data.ebit if data.ebit is not None else data.operating_income
         ebitda = data.ebitda
         revenue = data.revenue or 0
         interest = data.interest_expense or 0

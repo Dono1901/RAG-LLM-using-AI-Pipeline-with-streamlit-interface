@@ -12,7 +12,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Path, Request
+from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -161,10 +161,15 @@ async def security_headers_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def body_size_limit_middleware(request: Request, call_next):
-    """Reject request bodies exceeding the configured size limit."""
+    """Reject request bodies exceeding the configured size limit.
+
+    Checks both Content-Length header (fast reject) and actual body bytes
+    (defense against chunked transfer encoding bypass).
+    """
+    max_bytes = settings.max_request_body_bytes
     content_length = request.headers.get("content-length")
     try:
-        if content_length and int(content_length) > settings.max_request_body_bytes:
+        if content_length and int(content_length) > max_bytes:
             return JSONResponse(
                 status_code=413,
                 content={"detail": "Request body too large."},
@@ -174,6 +179,16 @@ async def body_size_limit_middleware(request: Request, call_next):
             status_code=400,
             content={"detail": "Invalid Content-Length header."},
         )
+
+    # Guard against chunked TE that omits Content-Length
+    if request.method in ("POST", "PUT", "PATCH") and not content_length:
+        body = await request.body()
+        if len(body) > max_bytes:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body too large."},
+            )
+
     return await call_next(request)
 
 
@@ -193,6 +208,12 @@ async def rate_limit_middleware(request: Request, call_next):
                 content={"detail": "Rate limit exceeded. Try again later."},
             )
         _rate_log[client_ip].append(now)
+        # Evict stale IPs to prevent unbounded dict growth
+        if not _rate_log[client_ip]:
+            del _rate_log[client_ip]
+        # Hard cap: if dict exceeds 10K IPs, clear entirely (DoS defense)
+        if len(_rate_log) > 10_000:
+            _rate_log.clear()
     return await call_next(request)
 
 
@@ -381,7 +402,7 @@ async def graph_context(period_label: str = Path(..., max_length=100)):
 
 
 @app.get("/graph/ratios/{period_label}", response_model=List[RatioEntry])
-async def graph_ratios(period_label: str = Path(..., max_length=100), category: Optional[str] = None):
+async def graph_ratios(period_label: str = Path(..., max_length=100), category: Optional[str] = Query(default=None, max_length=100)):
     """Return ratios for a fiscal period with optional category filter."""
     store = _require_graph_store()
     ratios = await asyncio.to_thread(store.ratios_by_period_label, period_label)
@@ -397,6 +418,14 @@ async def graph_ratios(period_label: str = Path(..., max_length=100), category: 
 
 class CompareRequest(BaseModel):
     period_labels: List[str] = Field(..., min_length=2, max_length=10)
+
+    @field_validator("period_labels")
+    @classmethod
+    def validate_label_lengths(cls, v: List[str]) -> List[str]:
+        for label in v:
+            if len(label) > 100:
+                raise ValueError(f"Period label too long ({len(label)} chars); max 100.")
+        return v
 
 
 class PeriodDelta(BaseModel):
@@ -539,7 +568,16 @@ async def compare_periods(req: CompareRequest):
 
 class ExportRequest(BaseModel):
     financial_data: Dict[str, Any]
-    company_name: str = ""
+    company_name: str = Field(default="", max_length=200)
+
+    @field_validator("financial_data")
+    @classmethod
+    def validate_field_count(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if len(v) > settings.max_financial_fields:
+            raise ValueError(
+                f"Too many fields ({len(v)}); max {settings.max_financial_fields}."
+            )
+        return v
 
 
 @app.post("/export/xlsx")
@@ -625,6 +663,13 @@ class PortfolioRequest(BaseModel):
             raise ValueError(
                 f"Too many companies ({len(v)}). Maximum is {_MAX_PORTFOLIO_COMPANIES}."
             )
+        # Validate field count per company
+        for name, data in v.items():
+            if len(data) > settings.max_financial_fields:
+                raise ValueError(
+                    f"Company '{name}' has too many fields ({len(data)}); "
+                    f"max {settings.max_financial_fields}."
+                )
         return v
 
 
@@ -746,7 +791,7 @@ class ComplianceResponse(BaseModel):
     sox_score: int
     sec_score: int
     sec_grade: str
-    regulatory_pct: float
+    regulatory_pct: Optional[float]
     regulatory_pass: int
     regulatory_fail: int
     audit_risk: str

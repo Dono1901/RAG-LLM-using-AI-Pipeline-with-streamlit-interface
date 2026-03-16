@@ -285,7 +285,9 @@ RATIO_CATALOG: Dict[str, RatioDefinition] = {
         ],
         adjustments=[
             Adjustment("operating_income", Operator.GT, 0, 0.5, "Positive operating income"),
-            Adjustment("total_debt", Operator.LT, 0.5, 0.5, "Low leverage"),
+            # NOTE: Removed total_debt < 0.5 adjustment -- total_debt is a dollar
+            # amount, not a ratio, so comparing against 0.5 is always false for
+            # real companies (dead code).
         ],
         unit="%"
     ),
@@ -308,11 +310,14 @@ RATIO_CATALOG: Dict[str, RatioDefinition] = {
         unit="%"
     ),
 
-    "roic": RatioDefinition(
-        name="Return on Invested Capital (ROIC)",
-        description="Measures return on total invested capital",
+    # NOTE: True ROIC = EBIT / Invested Capital (equity + debt - cash).
+    # The framework only has total_assets as a denominator field, so this is
+    # EBIT/Total Assets, not ROIC.  Renamed to avoid misrepresentation.
+    "ebit_to_total_assets": RatioDefinition(
+        name="EBIT / Total Assets",
+        description="Measures operating return on total assets (not true ROIC)",
         numerator_field="ebit",
-        denominator_field="total_assets",  # Simplified; should be invested capital
+        denominator_field="total_assets",
         higher_is_better=True,
         scoring_thresholds=[
             (0.15, 10.0),
@@ -387,20 +392,9 @@ RATIO_CATALOG: Dict[str, RatioDefinition] = {
         unit="x"
     ),
 
-    "quick_ratio": RatioDefinition(
-        name="Quick Ratio (Acid Test)",
-        description="Measures liquidity excluding inventory",
-        numerator_field="current_assets",  # Simplified; should subtract inventory
-        denominator_field="current_liabilities",
-        higher_is_better=True,
-        scoring_thresholds=[
-            (1.5, 10.0),
-            (1.0, 8.0),
-            (0.75, 6.0),
-            (0.5, 4.0),
-        ],
-        unit="x"
-    ),
+    # NOTE: quick_ratio removed from catalog -- the simple A/B framework cannot
+    # express (Current Assets - Inventory) / Current Liabilities.  The correct
+    # quick ratio is computed in CharlieAnalyzer.calculate_liquidity_ratios().
 
     "cash_ratio": RatioDefinition(
         name="Cash Ratio",
@@ -595,8 +589,8 @@ def get_ratio_by_category() -> Dict[str, List[str]]:
         Dict mapping category name to list of ratio keys
     """
     categories = {
-        "Profitability": ["roa", "roe", "roic", "gross_margin", "operating_margin", "net_margin"],
-        "Liquidity": ["current_ratio", "quick_ratio", "cash_ratio"],
+        "Profitability": ["roa", "roe", "ebit_to_total_assets", "gross_margin", "operating_margin", "net_margin"],
+        "Liquidity": ["current_ratio", "cash_ratio"],
         "Leverage": ["debt_to_equity", "debt_to_ebitda", "interest_coverage"],
         "Efficiency": ["asset_turnover", "inventory_turnover", "receivables_turnover"],
         "Cash Flow": ["fcf_yield", "ocf_to_ni", "cash_conversion_cycle"],

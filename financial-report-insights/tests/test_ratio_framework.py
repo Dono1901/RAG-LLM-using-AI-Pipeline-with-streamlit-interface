@@ -437,8 +437,8 @@ class TestRatioCatalog:
         from ratio_framework import RATIO_CATALOG
 
         expected = {
-            "roa", "roe", "roic", "gross_margin", "operating_margin", "net_margin",
-            "current_ratio", "quick_ratio", "cash_ratio",
+            "roa", "roe", "ebit_to_total_assets", "gross_margin", "operating_margin", "net_margin",
+            "current_ratio", "cash_ratio",
             "debt_to_equity", "debt_to_ebitda", "interest_coverage",
             "asset_turnover", "inventory_turnover", "receivables_turnover",
             "fcf_yield", "ocf_to_ni", "cash_conversion_cycle",
@@ -465,7 +465,7 @@ class TestRatioCatalog:
     def test_profitability_ratios_higher_is_better(self):
         from ratio_framework import RATIO_CATALOG
 
-        for key in ["roa", "roe", "roic", "gross_margin", "operating_margin", "net_margin"]:
+        for key in ["roa", "roe", "ebit_to_total_assets", "gross_margin", "operating_margin", "net_margin"]:
             assert RATIO_CATALOG[key].higher_is_better is True, f"{key} should be higher_is_better"
 
 

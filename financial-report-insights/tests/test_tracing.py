@@ -187,8 +187,8 @@ class TestThreadLocal:
         assert seen_in_child[0] is None
 
     def test_trace_logging(self, caplog):
-        """start_trace should log the summary on completion."""
-        with caplog.at_level("INFO", logger="observability.tracing"):
+        """start_trace should log the summary on completion (at DEBUG level)."""
+        with caplog.at_level("DEBUG", logger="observability.tracing"):
             with start_trace():
                 pass
         assert "Trace complete" in caplog.text
