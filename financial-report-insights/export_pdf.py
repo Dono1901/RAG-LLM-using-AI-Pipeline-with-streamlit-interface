@@ -109,6 +109,9 @@ class FinancialPDFExporter:
             k: v for k, v in analysis_results.items()
             if isinstance(v, (int, float)) or v is None
         }
+        _MAX_RATIO_ENTRIES = 500
+        if len(numeric) > _MAX_RATIO_ENTRIES:
+            numeric = dict(list(numeric.items())[:_MAX_RATIO_ENTRIES])
         if numeric:
             grouped: Dict[str, List[tuple]] = {}
             for key, value in numeric.items():
@@ -317,14 +320,16 @@ class FinancialPDFExporter:
 
         # Period
         if data.period:
+            period_str = str(data.period)[:100] if data.period else "N/A"
             pdf.ln(5)
             pdf.set_font("Helvetica", "I", 10)
-            pdf.cell(0, 7, f"Period: {data.period}", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Period: {period_str}", align="C", new_x="LMARGIN", new_y="NEXT")
 
         if report and report.generated_at:
+            generated_str = str(report.generated_at)[:100]
             pdf.ln(2)
             pdf.set_font("Helvetica", "I", 9)
-            pdf.cell(0, 7, f"Report generated: {report.generated_at}", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Report generated: {generated_str}", align="C", new_x="LMARGIN", new_y="NEXT")
 
     def _add_scoring_section(
         self,

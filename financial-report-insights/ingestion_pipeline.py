@@ -146,7 +146,8 @@ def _df_to_markdown(df: pd.DataFrame, max_rows: int = 200) -> str:
 
     try:
         return truncated.to_markdown(index=False)
-    except Exception:
+    except Exception as exc:
+        logger.debug("to_markdown fallback: %s", exc)
         # Fallback: simple pipe-delimited format
         lines = []
         headers = [str(c) for c in truncated.columns]
@@ -346,13 +347,26 @@ def ingest_text(
     source = file_path.name
     suffix = file_path.suffix.lower()
 
+    # Size guard: reject files larger than 50 MB to prevent OOM
+    _MAX_TEXT_BYTES = 50 * 1024 * 1024  # 50 MB
+    try:
+        file_size = file_path.stat().st_size
+    except OSError:
+        file_size = 0
+    if file_size > _MAX_TEXT_BYTES:
+        logger.warning(
+            "Text file %s is %d bytes (limit %d). Skipping.",
+            source, file_size, _MAX_TEXT_BYTES,
+        )
+        return []
+
     try:
         if suffix == ".docx":
             from docx import Document as DocxDocument
             doc = DocxDocument(file_path)
             text = "\n".join(p.text for p in doc.paragraphs)
         else:
-            text = file_path.read_text(encoding="utf-8")
+            text = file_path.read_text(encoding="utf-8", errors="replace")
 
         if not text.strip():
             return []
@@ -391,7 +405,10 @@ def ingest_file(file_path: Path) -> List[RAGChunk]:
     Returns:
         List of RAGChunk objects ready for embedding.
     """
-    file_path = Path(file_path)
+    file_path = Path(file_path).resolve()
+    if not file_path.is_file():
+        logger.warning("File not found or not a file: %s", file_path)
+        return []
     suffix = file_path.suffix.lower()
 
     if suffix in EXCEL_EXTENSIONS:

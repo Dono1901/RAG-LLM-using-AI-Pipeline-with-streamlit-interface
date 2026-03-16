@@ -90,7 +90,8 @@ class RAGEvalHarness:
         for qa in qa_pairs:
             retrieved_docs = self.rag.retrieve(qa.question, top_k=k)
             retrieved_sources = [
-                doc.get("source", "") for doc in retrieved_docs
+                doc.get("source", "") if isinstance(doc, dict) else ""
+                for doc in retrieved_docs
             ]
 
             p = precision_at_k(retrieved_sources, qa.expected_sources, k)
@@ -161,7 +162,10 @@ class RAGEvalHarness:
             answer_text = self.rag.answer(
                 qa.question, retrieved_docs=retrieved_docs
             )
-            chunks = [doc.get("content", "") for doc in retrieved_docs]
+            chunks = [
+                doc.get("content", "") if isinstance(doc, dict) else str(doc)
+                for doc in retrieved_docs
+            ]
 
             faith = faithfulness_score(answer_text, chunks)
             rel = relevance_score(answer_text, qa.question)

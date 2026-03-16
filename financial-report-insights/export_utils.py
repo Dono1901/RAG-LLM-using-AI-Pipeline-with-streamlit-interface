@@ -23,6 +23,9 @@ _GRADE_THRESHOLDS_100: List[Tuple[int, str]] = [
 
 def score_to_grade(score: int) -> str:
     """Map a 0-100 integer score to a letter grade (A/B/C/D/F)."""
+    if not isinstance(score, (int, float)):
+        raise TypeError(f"score_to_grade expects int/float, got {type(score).__name__}")
+    score = max(0, min(100, int(score)))
     for threshold, grade in _GRADE_THRESHOLDS_100:
         if score >= threshold:
             return grade

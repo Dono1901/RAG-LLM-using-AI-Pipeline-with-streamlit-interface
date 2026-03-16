@@ -387,14 +387,24 @@ class ParallelWorkflow:
                     future = executor.submit(_run_step, step, agent, ctx_snapshot)
                     future_to_step[future] = step
 
-                for future in as_completed(future_to_step):
-                    step_record = future.result()
-                    result.steps_completed.append(step_record)
-                    if step_record["error"]:
-                        result.errors.append(step_record["error"])
-                    else:
-                        context[step_record["output_key"]] = step_record["result"]
-                        result.final_output = step_record["result"]
+                _STEP_TIMEOUT_SECONDS = 300  # 5-minute per-step timeout
+                try:
+                    for future in as_completed(future_to_step, timeout=_STEP_TIMEOUT_SECONDS):
+                        step_record = future.result()
+                        result.steps_completed.append(step_record)
+                        if step_record["error"]:
+                            result.errors.append(step_record["error"])
+                        else:
+                            context[step_record["output_key"]] = step_record["result"]
+                            result.final_output = step_record["result"]
+                except TimeoutError:
+                    timed_out = [
+                        s.output_key for s in wave
+                        if future_to_step.get(future) and not future.done()
+                    ]
+                    msg = f"Wave timed out after {_STEP_TIMEOUT_SECONDS}s; incomplete steps: {timed_out}"
+                    logger.warning(msg)
+                    result.errors.append(msg)
 
         result.total_duration_ms = (time.monotonic() - workflow_start) * 1000.0
         result.success = len(result.errors) == 0

@@ -67,10 +67,13 @@ class SemanticCache:
         # OrderedDict preserves insertion order for FIFO eviction.
         # Values are (embedding_array, result_dict).
         self._store: OrderedDict[int, tuple[np.ndarray, dict]] = OrderedDict()
+        self._key_list: list[int] = []  # parallel list for O(1) index lookup
         self._next_key: int = 0
         self._hits: int = 0
         self._misses: int = 0
         self._lock = threading.Lock()
+        # Cached embedding matrix; rebuilt only when the store changes.
+        self._matrix: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -107,7 +110,9 @@ class SemanticCache:
                 return None
 
             q = self._normalize(np.asarray(query_embedding, dtype=np.float32))
-            matrix = self._build_matrix()
+            if self._matrix is None:
+                self._matrix = self._build_matrix()
+            matrix = self._matrix
             # matrix rows are already stored normalised (see put())
             similarities = matrix @ q  # shape: (n,)
             best_idx = int(np.argmax(similarities))
@@ -115,7 +120,7 @@ class SemanticCache:
 
             if best_sim >= self.similarity_threshold:
                 # Return the result from the matching entry.
-                key = list(self._store.keys())[best_idx]
+                key = self._key_list[best_idx]
                 _, result = self._store[key]
                 self._hits += 1
                 logger.debug("SemanticCache hit (similarity=%.4f)", best_sim)
@@ -137,12 +142,16 @@ class SemanticCache:
             if len(self._store) >= self.max_entries:
                 # Evict oldest (first) entry.
                 self._store.popitem(last=False)
+                self._key_list.pop(0)
 
             embedding = self._normalize(
                 np.asarray(query_embedding, dtype=np.float32)
             )
             self._store[self._next_key] = (embedding, result)
+            self._key_list.append(self._next_key)
             self._next_key += 1
+            # Invalidate cached matrix so it's rebuilt on the next get().
+            self._matrix = None
 
     def get_stats(self) -> dict:
         """Return cache performance statistics.
@@ -164,9 +173,11 @@ class SemanticCache:
         """Reset the cache and all counters."""
         with self._lock:
             self._store.clear()
+            self._key_list.clear()
             self._next_key = 0
             self._hits = 0
             self._misses = 0
+            self._matrix = None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +298,15 @@ class ChunkDeduplicator:
         """
         if not chunks:
             return []
+        # Early exit: single-element input is trivially unique.
+        if len(chunks) == 1:
+            return list(chunks)
+
+        if len(chunks) > 1000:
+            logger.warning(
+                "Large chunk set (%d), dedup may be slow — consider LSH for O(n) dedup",
+                len(chunks),
+            )
 
         hashes: list[int] = [_simhash(_normalise_text(c), self._NUM_BITS) for c in chunks]
         kept_indices: list[int] = []

@@ -49,9 +49,9 @@ check_file_size "$INSIGHTS" "insights_page.py"
 # ── 2. Test suite must pass ──
 echo -e "${CYAN}[checkpoint] Running tests...${NC}"
 PYTHON_PATH="$REPO_ROOT/financial-report-insights"
-PYTHON_EXE="/c/Users/dtmcg/AppData/Local/Microsoft/WindowsApps/python3.13.exe"
+PYTHON_EXE=$(command -v python3.13 2>/dev/null || command -v python3 2>/dev/null || command -v python 2>/dev/null || echo "")
 
-if [ -f "$PYTHON_EXE" ] || command -v "$PYTHON_EXE" &>/dev/null; then
+if [ -n "$PYTHON_EXE" ]; then
     pushd "$REPO_ROOT/financial-report-insights" > /dev/null
     TEST_OUTPUT=$("$PYTHON_EXE" -m pytest tests/ -q --tb=line 2>&1) || true
     popd > /dev/null

@@ -68,6 +68,10 @@ class CircuitBreaker:
         Used by streaming paths that cannot wrap the entire call in
         circuit_breaker.call().
 
+        Note: TOCTOU race exists between allow_request() and the actual call.
+        With max_workers=2 this is acceptable — worst case is one extra request
+        during HALF_OPEN -> OPEN transition.
+
         Raises:
             LLMConnectionError: If circuit is OPEN and not ready for recovery.
         """
@@ -359,6 +363,10 @@ class LocalLLM:
                 f"Ollama did not respond within {self._timeout}s. "
                 "The model may be loading or the prompt may be too long."
             ) from None
+        except (LLMConnectionError, LLMTimeoutError):
+            raise
+        except Exception as exc:
+            raise LLMConnectionError(f"Unexpected LLM error: {exc}") from exc
 
     def _raw_generate(self, prompt: str) -> str:
         """Raw Ollama call without timeout/retry wrappers."""

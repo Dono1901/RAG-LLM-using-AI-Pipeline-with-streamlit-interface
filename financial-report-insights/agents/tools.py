@@ -8,9 +8,12 @@ never raises on bad data.
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +646,8 @@ def tool_forecast(values: list[float], steps: int = 4) -> str:
         residuals = model.get_residuals()
         lower, upper = compute_prediction_intervals(forecasts, residuals, confidence=0.95)
         method = f"AR({max(1, order)})"
-    except Exception:
+    except ImportError:
+        logger.debug("Forecasting module not available, using linear extrapolation")
         # Fallback: simple linear extrapolation
         n = len(cleaned)
         if n >= 2:
@@ -660,6 +664,9 @@ def tool_forecast(values: list[float], steps: int = 4) -> str:
         lower = [f - 1.96 * std_val for f in forecasts]
         upper = [f + 1.96 * std_val for f in forecasts]
         method = "Linear Extrapolation"
+    except Exception as exc:
+        logger.warning("Forecast tool failed: %s", exc)
+        return f"Forecast error: {type(exc).__name__}"
 
     lines = [
         f"Forecast ({method}, {steps_int} periods):",

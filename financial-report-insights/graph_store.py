@@ -166,36 +166,38 @@ class Neo4jStore:
 
         try:
             with self._driver.session() as session:
-                session.run(MERGE_FISCAL_PERIOD, period_id=period_id, label=period_label, doc_id=doc_id)
+                with session.begin_transaction() as tx:
+                    tx.run(MERGE_FISCAL_PERIOD, period_id=period_id, label=period_label, doc_id=doc_id)
 
-                # Batch all ratios into a single UNWIND query
-                ratio_batch = []
-                for name, data in (ratios or {}).items():
-                    ratio_id = hashlib.sha256(f"{period_id}:{name}".encode()).hexdigest()
-                    ratio_batch.append({
-                        "ratio_id": ratio_id,
-                        "name": name,
-                        "value": data.get("value"),
-                        "category": data.get("category", ""),
-                        "period_id": period_id,
-                    })
-                if ratio_batch:
-                    session.run(MERGE_RATIOS_BATCH, batch=ratio_batch)
+                    # Batch all ratios into a single UNWIND query
+                    ratio_batch = []
+                    for name, data in (ratios or {}).items():
+                        ratio_id = hashlib.sha256(f"{period_id}:{name}".encode()).hexdigest()
+                        ratio_batch.append({
+                            "ratio_id": ratio_id,
+                            "name": name,
+                            "value": data.get("value"),
+                            "category": data.get("category", ""),
+                            "period_id": period_id,
+                        })
+                    if ratio_batch:
+                        tx.run(MERGE_RATIOS_BATCH, batch=ratio_batch)
 
-                # Batch all scores into a single UNWIND query
-                score_batch = []
-                for model, data in (scores or {}).items():
-                    score_id = hashlib.sha256(f"{period_id}:{model}".encode()).hexdigest()
-                    score_batch.append({
-                        "score_id": score_id,
-                        "model": model,
-                        "value": data.get("value"),
-                        "grade": data.get("grade", ""),
-                        "interpretation": data.get("interpretation", ""),
-                        "period_id": period_id,
-                    })
-                if score_batch:
-                    session.run(MERGE_SCORES_BATCH, batch=score_batch)
+                    # Batch all scores into a single UNWIND query
+                    score_batch = []
+                    for model, data in (scores or {}).items():
+                        score_id = hashlib.sha256(f"{period_id}:{model}".encode()).hexdigest()
+                        score_batch.append({
+                            "score_id": score_id,
+                            "model": model,
+                            "value": data.get("value"),
+                            "grade": data.get("grade", ""),
+                            "interpretation": data.get("interpretation", ""),
+                            "period_id": period_id,
+                        })
+                    if score_batch:
+                        tx.run(MERGE_SCORES_BATCH, batch=score_batch)
+                    tx.commit()
 
             logger.info("Stored financial data for %s / %s", doc_id, period_label)
         except _NEO4J_TRANSIENT as exc:
@@ -256,36 +258,38 @@ class Neo4jStore:
         total_stored = 0
         try:
             with self._driver.session() as session:
-                for stmt_type, fields in self._STATEMENT_FIELD_MAP.items():
-                    stmt_id = hashlib.sha256(
-                        f"{period_id}:{stmt_type}".encode()
-                    ).hexdigest()
-
-                    batch = []
-                    for field_name, display_name, unit in fields:
-                        value = getattr(financial_data, field_name, None)
-                        if value is None:
-                            continue
-                        item_id = hashlib.sha256(
-                            f"{stmt_id}:{field_name}".encode()
+                with session.begin_transaction() as tx:
+                    for stmt_type, fields in self._STATEMENT_FIELD_MAP.items():
+                        stmt_id = hashlib.sha256(
+                            f"{period_id}:{stmt_type}".encode()
                         ).hexdigest()
-                        batch.append({
-                            "item_id": item_id,
-                            "name": display_name,
-                            "value": float(value),
-                            "unit": unit,
-                            "stmt_id": stmt_id,
-                        })
 
-                    if batch:
-                        session.run(
-                            MERGE_FINANCIAL_STATEMENT,
-                            stmt_id=stmt_id,
-                            stmt_type=stmt_type,
-                            period_id=period_id,
-                        )
-                        session.run(MERGE_LINE_ITEMS_BATCH, batch=batch)
-                        total_stored += len(batch)
+                        batch = []
+                        for field_name, display_name, unit in fields:
+                            value = getattr(financial_data, field_name, None)
+                            if value is None:
+                                continue
+                            item_id = hashlib.sha256(
+                                f"{stmt_id}:{field_name}".encode()
+                            ).hexdigest()
+                            batch.append({
+                                "item_id": item_id,
+                                "name": display_name,
+                                "value": float(value),
+                                "unit": unit,
+                                "stmt_id": stmt_id,
+                            })
+
+                        if batch:
+                            tx.run(
+                                MERGE_FINANCIAL_STATEMENT,
+                                stmt_id=stmt_id,
+                                stmt_type=stmt_type,
+                                period_id=period_id,
+                            )
+                            tx.run(MERGE_LINE_ITEMS_BATCH, batch=batch)
+                            total_stored += len(batch)
+                    tx.commit()
 
             logger.info("Stored %d line items for period %s", total_stored, period_id)
         except _NEO4J_TRANSIENT as exc:

@@ -183,6 +183,7 @@ YIELD node, score
 RETURN node.chunk_id AS chunk_id, node.content AS content,
        node.source AS source, score
 ORDER BY score DESC
+LIMIT $top_k
 """
 
 GRAPH_CONTEXT_FOR_CHUNK = """
@@ -202,8 +203,8 @@ OPTIONAL MATCH (d)-[:PROVIDES_DATA_FOR]->(p:FiscalPeriod)
 OPTIONAL MATCH (p)-[:HAS_RATIO]->(r:FinancialRatio)
 OPTIONAL MATCH (p)-[:HAS_SCORE]->(s:ScoringResult)
 RETURN cid AS chunk_id, d.filename AS document, p.label AS period,
-       collect(DISTINCT {name: r.name, value: r.value, category: r.category}) AS ratios,
-       collect(DISTINCT {model: s.model, value: s.value, grade: s.grade}) AS scores
+       collect(DISTINCT {name: r.name, value: r.value, category: r.category})[..10] AS ratios,
+       collect(DISTINCT {model: s.model, value: s.value, grade: s.grade})[..10] AS scores
 """
 
 RATIOS_BY_PERIOD = """
@@ -347,6 +348,7 @@ MERGE (a)-[:REQUIRES_COVENANTS]->(p)
 RETURN count(p) AS stored
 """
 
+# TODO: implement read methods in Neo4jStore that use this query
 CREDIT_ASSESSMENT_BY_COMPANY = """
 MATCH (c:Company {name: $company_name})-[:HAS_CREDIT_ASSESSMENT]->(a:CreditAssessment)
 OPTIONAL MATCH (a)-[:REQUIRES_COVENANTS]->(p:CovenantPackage)
@@ -446,6 +448,7 @@ MERGE (c)-[:HAS_COMPLIANCE_REPORT]->(cr)
 RETURN count(cr) AS stored
 """
 
+# TODO: implement read methods in Neo4jStore that use this query
 COMPLIANCE_BY_COMPANY = """
 MATCH (c:Company {name: $company_name})-[:HAS_COMPLIANCE_REPORT]->(cr:ComplianceReport)
 RETURN cr.compliance_id AS compliance_id, cr.sox_risk AS sox_risk,

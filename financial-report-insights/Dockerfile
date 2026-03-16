@@ -49,9 +49,16 @@ USER appuser
 # Expose Streamlit + API ports
 EXPOSE 8501 8504
 
-# Health check verifies BOTH Streamlit and FastAPI are responding
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health'); urllib.request.urlopen('http://localhost:8504/health')" || exit 1
+# Health check verifies BOTH Streamlit and FastAPI are responding.
+# Each urllib call uses an explicit timeout so a hung service cannot
+# consume the full --timeout budget and mask a failed second service.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+    CMD python -c "\
+import urllib.request, sys; \
+try: urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5) \
+except Exception as e: print('Streamlit unhealthy:', e); sys.exit(1); \
+try: urllib.request.urlopen('http://localhost:8504/health', timeout=5) \
+except Exception as e: print('API unhealthy:', e); sys.exit(1)" || exit 1
 
 # Use tini as init process for proper signal forwarding
 ENTRYPOINT ["/usr/bin/tini", "--"]

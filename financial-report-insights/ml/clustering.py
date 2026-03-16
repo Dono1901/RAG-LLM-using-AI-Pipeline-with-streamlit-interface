@@ -59,7 +59,11 @@ class FinancialClusterer:
         Scales features, reduces to 2D via PCA for visualization, and runs
         the selected clustering algorithm.
         """
-        matrix = np.array(feature_matrix, dtype=np.float64)
+        if len(feature_matrix) == 0:
+            raise ValueError("Cannot fit clusterer on empty feature matrix")
+        matrix = np.asarray(feature_matrix, dtype=np.float64)
+        if matrix.ndim != 2:
+            raise ValueError(f"Expected 2D feature matrix, got shape {matrix.shape}")
         n_samples, n_features = matrix.shape
 
         self._feature_names = feature_names

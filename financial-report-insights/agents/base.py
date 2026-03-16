@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -91,6 +92,7 @@ class AgentMemory:
         self._max_messages = max_messages
         self._history: deque[AgentMessage] = deque(maxlen=max_messages)
         self._facts: dict[str, str] = {}
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Short-term (conversation history)
@@ -104,7 +106,8 @@ class AgentMemory:
         Args:
             msg: The message to store.
         """
-        self._history.append(msg)
+        with self._lock:
+            self._history.append(msg)
 
     def get_recent(self, n: int = 10) -> list[AgentMessage]:
         """Return the *n* most recent messages in chronological order.
@@ -133,7 +136,8 @@ class AgentMemory:
             key: Unique identifier for the fact.
             value: String value to associate with *key*.
         """
-        self._facts[key] = value
+        with self._lock:
+            self._facts[key] = value
 
     def recall_fact(self, key: str) -> Optional[str]:
         """Look up a fact by key.
@@ -546,6 +550,15 @@ class BaseAgent:
             return {}
 
         raw_args = arg_match.group(1).strip()
+        # Try JSON first for structured arguments
+        try:
+            import json
+            parsed = json.loads(raw_args)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fallback to key=value parsing
         arguments: dict[str, Any] = {}
         for pair in re.split(r"[,\s]+", raw_args):
             if "=" in pair:

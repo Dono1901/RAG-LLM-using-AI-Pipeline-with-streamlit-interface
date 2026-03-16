@@ -297,9 +297,10 @@ class EmbeddingCache:
         version: Version string.  Change this to invalidate the entire cache.
     """
 
-    def __init__(self, cache_dir: str, version: str = "1.0") -> None:
+    def __init__(self, cache_dir: str, version: str = "1.0", max_entries: int = 10_000) -> None:
         self._cache_dir = Path(cache_dir)
         self._version = version
+        self._max_entries = max_entries
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
@@ -348,6 +349,9 @@ class EmbeddingCache:
     def put(self, key: str, embedding: list[float]) -> None:
         """Store an embedding in the cache.
 
+        Evicts the oldest entry (by modification time) when the cache
+        exceeds ``max_entries``.
+
         Args:
             key: Cache key.
             embedding: Embedding vector to store.
@@ -355,6 +359,17 @@ class EmbeddingCache:
         path = self._entry_path(key)
         arr = np.asarray(embedding, dtype=np.float32)
         with self._lock:
+            # Evict oldest entry if at capacity
+            npz_files = sorted(
+                self._cache_dir.glob("*.npz"),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if len(npz_files) >= self._max_entries:
+                try:
+                    npz_files[0].unlink()
+                except OSError:
+                    pass
+
             np.savez_compressed(
                 path,
                 embedding=arr,
@@ -506,4 +521,9 @@ class BatchEmbedder:
                 cache.put(text, emb)
 
         # All slots should be filled
+        if any(r is None for r in results):
+            logger.warning(
+                "Embedding batch returned %d None values",
+                sum(1 for r in results if r is None),
+            )
         return [r for r in results if r is not None]  # type: ignore[misc]

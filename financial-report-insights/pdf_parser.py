@@ -330,14 +330,22 @@ def parse_pdf(file_path: Path) -> ParsedDocument:
     markdown = ""
     total_pages = 0
 
+    _MAX_PDF_PAGES = 500
+
     # Try pymupdf4llm first (best quality)
     try:
         import pymupdf4llm
-        markdown = pymupdf4llm.to_markdown(str(file_path))
-        import fitz
-        doc = fitz.open(file_path)
-        total_pages = len(doc)
-        doc.close()
+        import fitz as _fitz_check
+        _doc_check = _fitz_check.open(file_path)
+        total_pages = len(_doc_check)
+        _doc_check.close()
+        if total_pages > _MAX_PDF_PAGES:
+            logger.warning(
+                "PDF %s has %d pages (limit %d); truncating to first %d pages.",
+                file_path.name, total_pages, _MAX_PDF_PAGES, _MAX_PDF_PAGES,
+            )
+        page_list = list(range(min(total_pages, _MAX_PDF_PAGES)))
+        markdown = pymupdf4llm.to_markdown(str(file_path), pages=page_list)
         logger.info("Parsed PDF with pymupdf4llm: %s (%d pages)", file_path.name, total_pages)
     except ImportError:
         logger.info("pymupdf4llm not available, falling back to fitz")
@@ -345,8 +353,15 @@ def parse_pdf(file_path: Path) -> ParsedDocument:
             import fitz
             doc = fitz.open(file_path)
             total_pages = len(doc)
+            if total_pages > _MAX_PDF_PAGES:
+                logger.warning(
+                    "PDF %s has %d pages (limit %d); truncating to first %d pages.",
+                    file_path.name, total_pages, _MAX_PDF_PAGES, _MAX_PDF_PAGES,
+                )
             pages = []
-            for page in doc:
+            for page_idx, page in enumerate(doc):
+                if page_idx >= _MAX_PDF_PAGES:
+                    break
                 pages.append(page.get_text("text"))
             doc.close()
             markdown = "\n\n".join(pages)

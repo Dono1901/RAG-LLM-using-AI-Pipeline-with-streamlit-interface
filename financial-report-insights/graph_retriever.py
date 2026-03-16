@@ -8,6 +8,7 @@ Extends standard RAG retrieval with graph traversal capabilities:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from structured_types import GraphChunk, GraphFinancialContext, GraphRetrievalResult
@@ -141,7 +142,8 @@ def persist_analysis_to_graph(
             line = line.strip()
             if ":" in line and not line.startswith("="):
                 parts = line.split(":", 1)
-                name = parts[0].strip().lower().replace(" ", "_")
+                # Sanitize name extracted from LLM text to prevent property injection
+                name = re.sub(r'[^a-zA-Z0-9_ -]', '', parts[0].strip().lower().replace(" ", "_"))[:100]
                 value_str = parts[1].strip()
                 try:
                     # Try to parse numeric value
@@ -157,7 +159,8 @@ def persist_analysis_to_graph(
             line = line.strip()
             if ":" in line and not line.startswith("="):
                 parts = line.split(":", 1)
-                model = parts[0].strip().lower().replace(" ", "_")
+                # Sanitize model name extracted from LLM text to prevent property injection
+                model = re.sub(r'[^a-zA-Z0-9_ -]', '', parts[0].strip().lower().replace(" ", "_"))[:100]
                 rest = parts[1].strip()
                 try:
                     value = float(rest.split()[0])

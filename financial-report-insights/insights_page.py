@@ -255,7 +255,10 @@ class FinancialInsightsPage:
                     # Store in session state for cross-tab access
                     st.session_state['current_df'] = df
                     st.session_state['current_workbook'] = workbook
-                    st.session_state['analysis_results'] = self.analyzer.analyze(df)
+                    cache_key = f"analysis_{hash(str(df.to_dict()))}"
+                    if cache_key not in st.session_state:
+                        st.session_state[cache_key] = self.analyzer.analyze(df)
+                    st.session_state['analysis_results'] = st.session_state[cache_key]
 
                     # Category-based navigation (replaces 132 flat tabs)
                     categories = list(self.CATEGORY_TABS.keys())
@@ -1194,7 +1197,10 @@ class FinancialInsightsPage:
         # XLSX and PDF export buttons
         try:
             financial_data = self.analyzer._dataframe_to_financial_data(df)
-            analysis = self.analyzer.analyze(financial_data)
+            export_cache_key = f"analysis_{hash(str(financial_data))}"
+            if export_cache_key not in st.session_state:
+                st.session_state[export_cache_key] = self.analyzer.analyze(financial_data)
+            analysis = st.session_state[export_cache_key]
             report = self.analyzer.generate_report(financial_data)
 
             xlsx_col, pdf_col = st.columns(2)

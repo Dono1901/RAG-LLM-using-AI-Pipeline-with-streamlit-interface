@@ -71,6 +71,13 @@ class TestGraphSchema:
 def mock_driver():
     driver = MagicMock()
     session = MagicMock()
+    # Support both session.run() (auto-commit) and session.begin_transaction() (explicit tx)
+    tx = MagicMock()
+    session.begin_transaction.return_value.__enter__ = MagicMock(return_value=tx)
+    session.begin_transaction.return_value.__exit__ = MagicMock(return_value=False)
+    # Wire tx.run to the same mock as session.run so callers can assert on either
+    tx.run = session.run
+    tx.commit = MagicMock()
     driver.session.return_value.__enter__ = MagicMock(return_value=session)
     driver.session.return_value.__exit__ = MagicMock(return_value=False)
     return driver, session
@@ -961,6 +968,9 @@ class TestGraphStoreErrorPaths:
         from graph_store import Neo4jStore
         mock_driver = MagicMock()
         mock_session = MagicMock()
+        mock_tx = MagicMock()
+        mock_session.begin_transaction.return_value.__enter__ = MagicMock(return_value=mock_tx)
+        mock_session.begin_transaction.return_value.__exit__ = MagicMock(return_value=False)
         mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -972,9 +982,9 @@ class TestGraphStoreErrorPaths:
             ratios=None,
             scores=None
         )
-        # Should still create FiscalPeriod node
-        mock_session.run.assert_called()
-        assert mock_session.run.call_count >= 1
+        # Should still create FiscalPeriod node via transaction
+        mock_tx.run.assert_called()
+        assert mock_tx.run.call_count >= 1
 
     def test_store_line_items_with_all_none_values(self):
         """store_line_items handles FinancialData with all None fields."""

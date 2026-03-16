@@ -50,7 +50,7 @@ class RAGChunk:
     nl_description: Optional[str] = None
 
 
-def _generate_chunk_id(source: str, section: str, index: int) -> str:
+def _generate_chunk_id(source: str, section: str, index) -> str:
     """Generate a deterministic chunk ID."""
     key = f"{source}:{section}:{index}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
@@ -296,7 +296,8 @@ def chunk_table(
         A single RAGChunk for the entire table.
     """
     meta = metadata or {}
-    chunk_id = _generate_chunk_id(source, f"table:{section_title}", hash(table_text) % 10000)
+    table_hash = hashlib.sha256(table_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    chunk_id = _generate_chunk_id(source, f"table:{section_title}", table_hash)
 
     nl_desc = _generate_nl_description(table_text, section_type, section_title, source)
 

@@ -177,8 +177,20 @@ class AnalysisResults:
     composite_health: Optional[Any] = None
     insights: List[Any] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to the legacy Dict[str, Any] format for backward compat."""
+    def __post_init__(self) -> None:
+        # Lazily-populated dict cache for dict-style access methods.
+        # The object is treated as immutable after construction; mutating
+        # fields directly will NOT invalidate this cache.
+        object.__setattr__(self, '_dict_cache', None)
+
+    def _get_dict(self) -> Dict[str, Any]:
+        """Return cached dict representation, building it on first access."""
+        if self._dict_cache is None:
+            object.__setattr__(self, '_dict_cache', self._build_dict())
+        return self._dict_cache  # type: ignore[return-value]
+
+    def _build_dict(self) -> Dict[str, Any]:
+        """Build the dict representation (uncached)."""
         return {
             "liquidity_ratios": self.liquidity_ratios.to_dict(),
             "profitability_ratios": self.profitability_ratios.to_dict(),
@@ -193,33 +205,37 @@ class AnalysisResults:
             "insights": self.insights,
         }
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to the legacy Dict[str, Any] format for backward compat."""
+        return self._get_dict()
+
     def __getitem__(self, key: str) -> Any:
         """Support dict-style access for backward compat."""
-        return self.to_dict()[key]
+        return self._get_dict()[key]
 
     def __contains__(self, key: object) -> bool:
         """Support 'key in results' for backward compat."""
-        return key in self.to_dict()
+        return key in self._get_dict()
 
     def __iter__(self):
         """Support iteration over keys for backward compat."""
-        return iter(self.to_dict())
+        return iter(self._get_dict())
 
     def get(self, key: str, default: Any = None) -> Any:
         """Support dict-style .get() for backward compat."""
-        return self.to_dict().get(key, default)
+        return self._get_dict().get(key, default)
 
     def items(self):
         """Support .items() for backward compat."""
-        return self.to_dict().items()
+        return self._get_dict().items()
 
     def keys(self):
         """Support .keys() for backward compat."""
-        return self.to_dict().keys()
+        return self._get_dict().keys()
 
     def values(self):
         """Support .values() for backward compat."""
-        return self.to_dict().values()
+        return self._get_dict().values()
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> AnalysisResults:

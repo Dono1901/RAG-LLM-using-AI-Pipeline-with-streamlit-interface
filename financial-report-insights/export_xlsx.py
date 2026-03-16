@@ -367,6 +367,9 @@ class FinancialExcelExporter:
             k: v for k, v in results.items()
             if isinstance(v, (int, float)) or v is None
         }
+        _MAX_RATIO_ENTRIES = 500
+        if len(numeric) > _MAX_RATIO_ENTRIES:
+            numeric = dict(list(numeric.items())[:_MAX_RATIO_ENTRIES])
         if not numeric:
             ws.write(0, 0, "No ratio data available.", fmt.text)
             return

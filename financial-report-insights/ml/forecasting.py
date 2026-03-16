@@ -6,11 +6,15 @@ ensemble forecasting with walk-forward validation, and prediction intervals.
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 from scipy.optimize import minimize
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,12 +108,15 @@ class SimpleARModel:
         history = list(self._values)
         forecasts: list[float] = []
 
-        for _ in range(steps):
+        for step in range(steps):
             # y_hat = intercept + sum(coeff_i * y_{t-i})
             recent = history[-self.order :]
             y_hat = self._intercept + float(
                 np.dot(self._coefficients, recent[::-1])
             )
+            if not math.isfinite(y_hat):
+                logger.warning("AR model prediction diverged at step %d", step)
+                break
             forecasts.append(y_hat)
             history.append(y_hat)
 
@@ -155,6 +162,11 @@ class ExponentialSmoother:
         self._seasonal: Optional[np.ndarray] = None
         self._residuals: Optional[np.ndarray] = None
         self._fitted: bool = False
+
+    @property
+    def seasonal_period(self) -> int:
+        """Public accessor for the seasonal period."""
+        return self._seasonal_period
 
     def fit(
         self, values: list[float], seasonal_period: int = 4
@@ -479,7 +491,7 @@ def walk_forward_validate(
                 clone.fit(train)
             else:
                 clone = ExponentialSmoother(method=model.method)
-                clone.fit(train, seasonal_period=model._seasonal_period)
+                clone.fit(train, seasonal_period=model.seasonal_period)
 
             pred = clone.predict(steps=1)[0]
         except ValueError:
@@ -541,6 +553,8 @@ class EnsembleForecaster:
             raise ValueError("Need at least 4 data points for ensemble forecasting")
 
         model_scores: dict[str, float] = {}
+        # Cache walk-forward results to avoid redundant validation passes.
+        wf_cache: dict[str, dict[str, float]] = {}
 
         for method in self.methods:
             try:
@@ -554,6 +568,7 @@ class EnsembleForecaster:
                         values,
                         test_size=min(3, len(values) - max(1, order) - 1),
                     )
+                    wf_cache["ar"] = metrics
                     model_scores["ar"] = metrics.get("mae", float("inf"))
 
                 elif method == "exponential":
@@ -565,6 +580,7 @@ class EnsembleForecaster:
                         values,
                         test_size=min(3, len(values) - 2),
                     )
+                    wf_cache["exponential"] = metrics
                     model_scores["exponential"] = metrics.get("mae", float("inf"))
             except (ValueError, RuntimeError):
                 continue
@@ -586,22 +602,14 @@ class EnsembleForecaster:
         total = sum(inv_scores.values())
         self._weights = {k: v / total for k, v in inv_scores.items()}
 
-        # Aggregate metrics
+        # Aggregate metrics — reuse cached walk-forward results instead of
+        # running validation a second time for each model.
         all_metrics: dict[str, list[float]] = {"mae": [], "rmse": [], "mape": []}
         for method_name in self._models:
-            try:
-                if method_name == "ar":
-                    m_instance = SimpleARModel(order=self._models["ar"].order)  # type: ignore[union-attr]
-                else:
-                    m_instance = ExponentialSmoother(method="double")  # type: ignore[assignment]
-                met = walk_forward_validate(
-                    m_instance, values, test_size=min(3, len(values) - 3)
-                )
-                for k in all_metrics:
-                    if np.isfinite(met.get(k, float("nan"))):
-                        all_metrics[k].append(met[k])
-            except (ValueError, RuntimeError):
-                pass
+            met = wf_cache.get(method_name, {})
+            for k in all_metrics:
+                if np.isfinite(met.get(k, float("nan"))):
+                    all_metrics[k].append(met[k])
 
         self._metrics = {
             k: float(np.mean(v)) if v else float("nan")
